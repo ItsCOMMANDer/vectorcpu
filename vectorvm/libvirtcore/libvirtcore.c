@@ -53,23 +53,22 @@ void instruction_bne(struct vcpu_core* cpu, uint16_t instruction) {if(!cpu->zf) 
 
 void instruction_ldi(struct vcpu_core* cpu, uint16_t instruction) {cpu->gpr[INS_DST(instruction)] = INS_IMM8(instruction);}
 
-void instruction_wrss(struct vcpu_core* cpu, uint16_t instruction) {cpu->ss_sp = (cpu->ss_sp & 0xff) | ((cpu->gpr[INS_SRC1(instruction)] & 0b1111) << 8);}
-void instruction_wrds(struct vcpu_core* cpu, uint16_t instruction) {cpu->ds = cpu->gpr[INS_SRC1(instruction)] & 0b1111;}
-void instruction_wrsp(struct vcpu_core* cpu, uint16_t instruction) {cpu->ss_sp |= cpu->gpr[INS_SRC1(instruction)];}
+void instruction_wrss(struct vcpu_core* cpu, uint16_t instruction) {cpu->ss_sp = (cpu->ss_sp & 0xff) | ((((INS_SRC1(instruction) == 0 && cpu->zren) ? 0 : cpu->gpr[INS_SRC1(instruction)]) & 0b1111) << 8);}
+void instruction_wrds(struct vcpu_core* cpu, uint16_t instruction) {cpu->ds = ((INS_SRC1(instruction) == 0 && cpu->zren) ? 0 : cpu->gpr[INS_SRC1(instruction)]) & 0b1111;}
+void instruction_wrsp(struct vcpu_core* cpu, uint16_t instruction) {cpu->ss_sp |= ((INS_SRC1(instruction) == 0 && cpu->zren) ? 0 : cpu->gpr[INS_SRC1(instruction)]);}
 
 void instruction_rdss(struct vcpu_core* cpu, uint16_t instruction) {cpu->gpr[INS_DST(instruction)] = cpu->ss_sp >> 8;}
 void instruction_rdds(struct vcpu_core* cpu, uint16_t instruction) {cpu->gpr[INS_DST(instruction)] = cpu->ds;}
 void instruction_rdsp(struct vcpu_core* cpu, uint16_t instruction) {cpu->gpr[INS_DST(instruction)] = cpu->ss_sp & 0xff;}
 
-void instruction_mov(struct vcpu_core* cpu, uint16_t instruction) {cpu->gpr[INS_DST(instruction)] = cpu->gpr[INS_SRC1(instruction)];}
-void instruction_not(struct vcpu_core* cpu, uint16_t instruction) {cpu->gpr[INS_DST(instruction)] = ~cpu->gpr[INS_SRC1(instruction)];}
-void instruction_ldr(struct vcpu_core* cpu, uint16_t instruction) {cpu->gpr[INS_DST(instruction)] = cpu->readMem((cpu->ds << 8) | cpu->gpr[INS_SRC1(instruction)]);}
-void instruction_str(struct vcpu_core* cpu, uint16_t instruction) {cpu->writeMem((cpu->ds << 8) | cpu->gpr[INS_DST(instruction)], cpu->gpr[INS_DST(instruction)]);}
+void instruction_mov(struct vcpu_core* cpu, uint16_t instruction) {cpu->gpr[INS_DST(instruction)] = ((INS_SRC1(instruction) == 0 && cpu->zren) ? 0 : cpu->gpr[INS_SRC1(instruction)]);}
+void instruction_not(struct vcpu_core* cpu, uint16_t instruction) {cpu->gpr[INS_DST(instruction)] = ~((INS_SRC1(instruction) == 0 && cpu->zren) ? 0 : cpu->gpr[INS_SRC1(instruction)]);}
+void instruction_ldr(struct vcpu_core* cpu, uint16_t instruction) {cpu->gpr[INS_DST(instruction)] = cpu->readMem((cpu->ds << 8) | ((INS_SRC1(instruction) == 0 && cpu->zren) ? 0 : cpu->gpr[INS_SRC1(instruction)]));}
+void instruction_str(struct vcpu_core* cpu, uint16_t instruction) {cpu->writeMem((cpu->ds << 8) | cpu->gpr[INS_DST(instruction)], ((INS_SRC1(instruction) == 0 && cpu->zren) ? 0 : cpu->gpr[INS_SRC1(instruction)]));}
 
 void instruction_add(struct vcpu_core* cpu, uint16_t instruction) {
-    printf("ADD EXEC\n");
-    uint8_t a = cpu->gpr[INS_SRC1(instruction)] & 0xff;
-    uint8_t b = cpu->gpr[INS_SRC2(instruction)] & 0xff;
+    uint8_t a = ((INS_SRC1(instruction) == 0 && cpu->zren) ? 0 : cpu->gpr[INS_SRC1(instruction)]) & 0xff;
+    uint8_t b = ((INS_SRC2(instruction) == 0 && cpu->zren) ? 0 : cpu->gpr[INS_SRC2(instruction)]) & 0xff;
 
     uint16_t result = (uint16_t)b + (uint16_t)a;
 
@@ -88,8 +87,8 @@ void instruction_add(struct vcpu_core* cpu, uint16_t instruction) {
 }
 
 void instruction_sub(struct vcpu_core* cpu, uint16_t instruction) {
-    uint8_t a = cpu->gpr[INS_SRC1(instruction)] & 0xff;
-    uint8_t b = cpu->gpr[INS_SRC2(instruction)] & 0xff;
+    uint8_t a = ((INS_SRC1(instruction) == 0 && cpu->zren) ? 0 : cpu->gpr[INS_SRC1(instruction)]) & 0xff;
+    uint8_t b = ((INS_SRC2(instruction) == 0 && cpu->zren) ? 0 : cpu->gpr[INS_SRC2(instruction)]) & 0xff;
 
     uint16_t result = (uint16_t)a + (uint16_t)(~b + 1);
 
@@ -108,8 +107,8 @@ void instruction_sub(struct vcpu_core* cpu, uint16_t instruction) {
 }
 
 void instruction_adc(struct vcpu_core* cpu, uint16_t instruction) {
-    uint8_t a = cpu->gpr[INS_SRC1(instruction)] & 0xff;
-    uint8_t b = cpu->gpr[INS_SRC2(instruction)] & 0xff;
+    uint8_t a = ((INS_SRC1(instruction) == 0 && cpu->zren) ? 0 : cpu->gpr[INS_SRC1(instruction)]) & 0xff;
+    uint8_t b = ((INS_SRC2(instruction) == 0 && cpu->zren) ? 0 : cpu->gpr[INS_SRC2(instruction)]) & 0xff;
 
     uint16_t result = (uint16_t)b + (uint16_t)a + (cpu->cf == true ? 1 : 0);
 
@@ -128,8 +127,8 @@ void instruction_adc(struct vcpu_core* cpu, uint16_t instruction) {
 }
 
 void instruction_sbc(struct vcpu_core* cpu, uint16_t instruction) {
-    uint8_t a = cpu->gpr[INS_SRC1(instruction)] & 0xff;
-    uint8_t b = cpu->gpr[INS_SRC2(instruction)] & 0xff;
+    uint8_t a = ((INS_SRC1(instruction) == 0 && cpu->zren) ? 0 : cpu->gpr[INS_SRC1(instruction)]) & 0xff;
+    uint8_t b = ((INS_SRC2(instruction) == 0 && cpu->zren) ? 0 : cpu->gpr[INS_SRC2(instruction)]) & 0xff;
 
     uint16_t result = (uint16_t)a + (uint16_t)(~b + 1) + (cpu->cf == true ? 1 : 0);
 
@@ -147,26 +146,24 @@ void instruction_sbc(struct vcpu_core* cpu, uint16_t instruction) {
     if(!(IMM8_MSB(a) | IMM8_MSB(b))) cpu->lts = false;
 }
 
-void instruction_and(struct vcpu_core* cpu, uint16_t instruction) {cpu->gpr[INS_DST(instruction)] = cpu->gpr[INS_SRC1(instruction)] & cpu->gpr[INS_SRC2(instruction)];}
-void instruction_or(struct vcpu_core* cpu, uint16_t instruction) {cpu->gpr[INS_DST(instruction)] = cpu->gpr[INS_SRC1(instruction)] | cpu->gpr[INS_SRC2(instruction)];}
-void instruction_xor(struct vcpu_core* cpu, uint16_t instruction) {cpu->gpr[INS_DST(instruction)] = cpu->gpr[INS_SRC1(instruction)] ^ cpu->gpr[INS_SRC2(instruction)];}
+void instruction_and(struct vcpu_core* cpu, uint16_t instruction) {cpu->gpr[INS_DST(instruction)] = ((INS_SRC1(instruction) == 0 && cpu->zren) ? 0 : cpu->gpr[INS_SRC1(instruction)]) & ((INS_SRC2(instruction) == 0 && cpu->zren) ? 0 : cpu->gpr[INS_SRC2(instruction)]);}
+void instruction_or(struct vcpu_core* cpu, uint16_t instruction) {cpu->gpr[INS_DST(instruction)] = ((INS_SRC1(instruction) == 0 && cpu->zren) ? 0 : cpu->gpr[INS_SRC1(instruction)]) | ((INS_SRC2(instruction) == 0 && cpu->zren) ? 0 : cpu->gpr[INS_SRC2(instruction)]);}
+void instruction_xor(struct vcpu_core* cpu, uint16_t instruction) {cpu->gpr[INS_DST(instruction)] = ((INS_SRC1(instruction) == 0 && cpu->zren) ? 0 : cpu->gpr[INS_SRC1(instruction)]) ^ ((INS_SRC2(instruction) == 0 && cpu->zren) ? 0 : cpu->gpr[INS_SRC2(instruction)]);}
 
 void instruction_in(struct vcpu_core* cpu, uint16_t instruction) {cpu->gpr[INS_DST(instruction)] = cpu->readPort(INS_PID(instruction));}
-void instruction_out(struct vcpu_core* cpu, uint16_t instruction) {cpu->writePort(INS_PID(instruction), cpu->gpr[INS_SRC1(instruction)]);}
+void instruction_out(struct vcpu_core* cpu, uint16_t instruction) {cpu->writePort(INS_PID(instruction), ((INS_SRC1(instruction) == 0 && cpu->zren) ? 0 : cpu->gpr[INS_SRC1(instruction)]));}
 
-void instruction_push(struct vcpu_core* cpu, uint16_t instruction) {cpu->writeMem(--cpu->ss_sp, cpu->gpr[INS_SRC1(instruction)]); cpu->ss_sp &= 0xfff;}
+void instruction_push(struct vcpu_core* cpu, uint16_t instruction) {cpu->writeMem(--cpu->ss_sp, ((INS_SRC1(instruction) == 0 && cpu->zren) ? 0 : cpu->gpr[INS_SRC1(instruction)])); cpu->ss_sp &= 0xfff;}
 void instruction_pop(struct vcpu_core* cpu, uint16_t instruction) {cpu->gpr[INS_DST(instruction)] = cpu->readMem(cpu->ss_sp++); cpu->ss_sp &= 0xfff;}
 
 void instruction_srldr(struct vcpu_core* cpu, uint16_t instruction) {cpu->gpr[INS_DST(instruction)] = cpu->readMem((((int16_t)(cpu->ss_sp) + (int16_t)INS_IMM8(instruction)) & 0xfff));}
-void instruction_srstr(struct vcpu_core* cpu, uint16_t instruction) {cpu->writeMem(((int16_t)(cpu->ss_sp) + (int16_t)INS_IMM8(instruction)) & 0xfff, cpu->gpr[INS_SRC1ALT1(instruction)]);}
+void instruction_srstr(struct vcpu_core* cpu, uint16_t instruction) {cpu->writeMem(((int16_t)(cpu->ss_sp) + (int16_t)INS_IMM8(instruction)) & 0xfff, ((INS_SRC1ALT1(instruction) == 0 && cpu->zren) ? 0 : cpu->gpr[INS_SRC1ALT1(instruction)]));}
 
 void instruction_addi(struct vcpu_core* cpu, uint16_t instruction) {
     uint8_t a = INS_IMM8(instruction) & 0xff;
-    uint8_t b = cpu->gpr[INS_SRC1ALT2(instruction)] & 0xff;
+    uint8_t b = ((INS_SRC1ALT2(instruction) == 0 && cpu->zren) ? 0 : cpu->gpr[INS_SRC1ALT2(instruction)]) & 0xff;
 
     uint16_t result = (uint16_t)a + (uint16_t)b;
-
-    printf("DEBUG: %i + %i = %i\n", a, b, result);
 
     cpu->gpr[INS_DST(instruction)] = (uint8_t)(result & 0xff);
 
@@ -301,7 +298,7 @@ void vcore_dump(struct vcpu_core* cpu) {
     printf("\t\tpc:\t%u\t0x%x\t0b"IMM12_TO_BINARY_PATTERN"\n\n", (unsigned int)cpu->pc & 0b111111111111, cpu->pc & 0b111111111111, IMM12_TO_BINARY(cpu->pc & 0b111111111111));
     printf("\t\tsp:\t%u\t0x%x\t0b"BYTE_TO_BINARY_PATTERN"\n", (unsigned int)cpu->ss_sp & 0xff, cpu->ss_sp & 0xff, BYTE_TO_BINARY(cpu->ss_sp & 0xff));
     printf("\t\tss:sp:\t%u\t0x%x\t0b"IMM12_TO_BINARY_PATTERN"\n", (unsigned int)cpu->ss_sp & 0b111111111111, cpu->ss_sp & 0b111111111111, IMM12_TO_BINARY(cpu->ss_sp & 0b111111111111));
-    printf("SEGMENTS:\tss:\t%u\t0x%x\t0b"NIBBLE_TO_BINARY_PATTERN"\n", cpu->ss_sp >> 8, cpu->ss_sp >> 8, NIBBLE_TO_BINARY(cpu->ss_sp >> 8));
+    printf("SEGMENTS:\tss:\t%u\t0x%x\t0b"NIBBLE_TO_BINARY_PATTERN"\n", (cpu->ss_sp >> 8) & 0b1111, (cpu->ss_sp >> 8) & 0b111, NIBBLE_TO_BINARY((cpu->ss_sp >> 8) & 0b111));
     printf("\t\tds:\t%u\t0x%x\t0b"NIBBLE_TO_BINARY_PATTERN"\n", (unsigned int)cpu->ds, cpu->ds, NIBBLE_TO_BINARY(cpu->ds));
     printf("FLAGS:\tZF: %i\tCF: %i\t LTU: %i\t LTS: %i\n", cpu->zf ? 1 : 0, cpu->cf ? 1 : 0, cpu->ltu ? 1 : 0, cpu->lts ? 1 : 0);
     printf("MISC:\tZReg: %i\tHALTED: %i\n", cpu->zren ? 1 : 0, cpu->halted ? 1 : 0);

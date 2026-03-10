@@ -21,6 +21,15 @@ void implWriteMem(uint16_t addr, uint8_t val) {
 }
 
 uint16_t program[] = {
+    MKI_LDI(REG_R0, 42),
+    MKI_ENZR(),
+    MKI_MOV(REG_R1, REG_R0),
+    MKI_DSZR(),
+    MKI_MOV(REG_R2, REG_R0),
+    MKI_HALT(),
+};
+
+uint16_t fib[] = {
 /* 00 */ MKI_LDI(REG_R1, 13),
 /* 02 */ MKI_CALL(6),
 /* 04 */ MKI_HALT(),
@@ -72,13 +81,13 @@ int main(int argc, char** argv) {
 
     memcpy(ram, &program, sizeof(program));
 
-    vcore_dump(&core);
+    //vcore_dump(&core);
  
     while(!core.halted) {
         //getchar();
         vcore_step(&core);
-        vcore_dump(&core);
-        printf("\n\n");
+        //vcore_dump(&core);
+        //printf("\n\n");
     }
 
     vcore_dump(&core);

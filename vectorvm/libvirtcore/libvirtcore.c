@@ -1,5 +1,6 @@
 #include "libvirtcore.h"
 
+#include <stdio.h>
 #include <stdint.h>
 
 struct instruction {
@@ -19,17 +20,17 @@ struct instruction {
 
 #define IMM8_MSB(x) ((x >> 7) & 1)
 
-void instruction_nop(struct vcpu_core* cpu, uint16_t instruction) {return;}
-void instruction_halt(struct vcpu_core* cpu, uint16_t instruction) {cpu->halted = true;}
-void instruction_ret(struct vcpu_core* cpu, uint16_t instruction) {
-    uint8_t pc_hi = cpu->readMem(cpu->ss_sp--);
-    uint8_t pc_lo = cpu->readMem(cpu->ss_sp--);
+void instruction_nop(struct vcpu_core* cpu __attribute__((unused)), uint16_t instruction __attribute__((unused))) {return;}
+void instruction_halt(struct vcpu_core* cpu, uint16_t instruction __attribute__((unused))) {cpu->halted = true;}
+void instruction_ret(struct vcpu_core* cpu, uint16_t instruction __attribute__((unused))) {
+    uint8_t pc_hi = cpu->readMem(cpu->ss_sp++);
+    uint8_t pc_lo = cpu->readMem(cpu->ss_sp++);
     uint16_t new_pc = (pc_hi << 8 | pc_lo) & 0b111111111111;
     cpu->pc = new_pc;
 }
 
-void instruction_enzr(struct vcpu_core* cpu, uint16_t instruction) {cpu->zren = true;}
-void instruction_dszr(struct vcpu_core* cpu, uint16_t instruction) {cpu->zren = false;}
+void instruction_enzr(struct vcpu_core* cpu, uint16_t instruction __attribute__((unused))) {cpu->zren = true;}
+void instruction_dszr(struct vcpu_core* cpu, uint16_t instruction __attribute__((unused))) {cpu->zren = false;}
 
 void instruction_jmp(struct vcpu_core* cpu, uint16_t instruction) {cpu->pc = INS_ADDR(instruction);}
 void instruction_call(struct vcpu_core* cpu, uint16_t instruction) {
@@ -37,8 +38,8 @@ void instruction_call(struct vcpu_core* cpu, uint16_t instruction) {
     uint8_t pc_lo = old_pc & 0xff;
     uint8_t pc_hi = (old_pc >> 8) && 0b1111;
     cpu->pc = INS_ADDR(instruction);
-    cpu->writeMem(++cpu->ss_sp, pc_lo);
-    cpu->writeMem(++cpu->ss_sp, pc_hi);
+    cpu->writeMem(--cpu->ss_sp, pc_lo);
+    cpu->writeMem(--cpu->ss_sp, pc_hi);
 }
 
 void instruction_bltu(struct vcpu_core* cpu, uint16_t instruction) {if(cpu->ltu) {cpu->pc = INS_ADDR(instruction );}}
@@ -52,8 +53,7 @@ void instruction_bne(struct vcpu_core* cpu, uint16_t instruction) {if(!cpu->zf) 
 
 void instruction_ldi(struct vcpu_core* cpu, uint16_t instruction) {cpu->gpr[INS_DST(instruction)] = INS_IMM8(instruction);}
 
-
-void instruction_wrss(struct vcpu_core* cpu, uint16_t instruction) {cpu->ss_sp |= (cpu->gpr[INS_SRC1(instruction)] & 0b1111) << 8;}
+void instruction_wrss(struct vcpu_core* cpu, uint16_t instruction) {cpu->ss_sp = (cpu->ss_sp & 0xff) | ((cpu->gpr[INS_SRC1(instruction)] & 0b1111) << 8);}
 void instruction_wrds(struct vcpu_core* cpu, uint16_t instruction) {cpu->ds = cpu->gpr[INS_SRC1(instruction)] & 0b1111;}
 void instruction_wrsp(struct vcpu_core* cpu, uint16_t instruction) {cpu->ss_sp |= cpu->gpr[INS_SRC1(instruction)];}
 
@@ -67,82 +67,83 @@ void instruction_ldr(struct vcpu_core* cpu, uint16_t instruction) {cpu->gpr[INS_
 void instruction_str(struct vcpu_core* cpu, uint16_t instruction) {cpu->writeMem((cpu->ds << 8) | cpu->gpr[INS_DST(instruction)], cpu->gpr[INS_DST(instruction)]);}
 
 void instruction_add(struct vcpu_core* cpu, uint16_t instruction) {
-    uint8_t a = INS_SRC1(instruction) & 0xff;
-    uint8_t b = INS_SRC2(instruction) & 0xff;
+    printf("ADD EXEC\n");
+    uint8_t a = cpu->gpr[INS_SRC1(instruction)] & 0xff;
+    uint8_t b = cpu->gpr[INS_SRC2(instruction)] & 0xff;
 
     uint16_t result = (uint16_t)b + (uint16_t)a;
 
     cpu->gpr[INS_DST(instruction)] = (uint8_t)(result & 0xff);
 
-    cpu->cf = (result >> 8) & 1 == 1;
-    cpu->zf = result & 0xff == 0;
+    cpu->cf = ((result >> 8) & 1) == 1 ? 1 : 0;
+    cpu->zf = (result & 0xff) == 0 ? 1 : 0;
 
     if(IMM8_MSB(a) & IMM8_MSB(b)) cpu->ltu = false;
-    if(IMM8_MSB(a) ^ IMM8_MSB(b) == 1) cpu->ltu = IMM8_MSB(result);
+    if((IMM8_MSB(a) ^ IMM8_MSB(b)) == 1) cpu->ltu = IMM8_MSB(result);
     if(!(IMM8_MSB(a) | IMM8_MSB(b))) cpu->ltu = true;
 
     if(IMM8_MSB(a) & IMM8_MSB(b)) cpu->lts = true;
-    if(IMM8_MSB(a) ^ IMM8_MSB(b) == 1) cpu->lts = IMM8_MSB(result);
+    if((IMM8_MSB(a) ^ IMM8_MSB(b)) == 1) cpu->lts = IMM8_MSB(result);
     if(!(IMM8_MSB(a) | IMM8_MSB(b))) cpu->lts = false;
 }
 
 void instruction_sub(struct vcpu_core* cpu, uint16_t instruction) {
-    uint8_t a = INS_SRC1(instruction) & 0xff;
-    uint8_t b = INS_SRC2(instruction) & 0xff;
+    uint8_t a = cpu->gpr[INS_SRC1(instruction)] & 0xff;
+    uint8_t b = cpu->gpr[INS_SRC2(instruction)] & 0xff;
 
-    uint16_t result = (uint16_t)b + (uint16_t)(~a + 1);
+    uint16_t result = (uint16_t)a + (uint16_t)(~b + 1);
 
     cpu->gpr[INS_DST(instruction)] = (uint8_t)(result & 0xff);
 
-    cpu->cf = (result >> 8) & 1 == 1;
-    cpu->zf = result & 0xff == 0;
+    cpu->cf = ((result >> 8) & 1) == 1 ? 1 : 0;
+    cpu->zf = (result & 0xff) == 0 ? 1 : 0;
 
     if(IMM8_MSB(a) & IMM8_MSB(b)) cpu->ltu = false;
-    if(IMM8_MSB(a) ^ IMM8_MSB(b) == 1) cpu->ltu = IMM8_MSB(result);
+    if((IMM8_MSB(a) ^ IMM8_MSB(b)) == 1) cpu->ltu = IMM8_MSB(result);
     if(!(IMM8_MSB(a) | IMM8_MSB(b))) cpu->ltu = true;
 
     if(IMM8_MSB(a) & IMM8_MSB(b)) cpu->lts = true;
-    if(IMM8_MSB(a) ^ IMM8_MSB(b) == 1) cpu->lts = IMM8_MSB(result);
+    if((IMM8_MSB(a) ^ IMM8_MSB(b)) == 1) cpu->lts = IMM8_MSB(result);
     if(!(IMM8_MSB(a) | IMM8_MSB(b))) cpu->lts = false;
 }
 
 void instruction_adc(struct vcpu_core* cpu, uint16_t instruction) {
-    uint8_t a = INS_SRC1(instruction) & 0xff;
-    uint8_t b = INS_SRC2(instruction) & 0xff;
+    uint8_t a = cpu->gpr[INS_SRC1(instruction)] & 0xff;
+    uint8_t b = cpu->gpr[INS_SRC2(instruction)] & 0xff;
 
     uint16_t result = (uint16_t)b + (uint16_t)a + (cpu->cf == true ? 1 : 0);
 
     cpu->gpr[INS_DST(instruction)] = (uint8_t)(result & 0xff);
 
-    cpu->cf = (result >> 8) & 1 == 1;
-    cpu->zf = result & 0xff == 0;
+    cpu->cf = ((result >> 8) & 1) == 1 ? 1 : 0;
+    cpu->zf = (result & 0xff) == 0 ? 1 : 0;
 
     if(IMM8_MSB(a) & IMM8_MSB(b)) cpu->ltu = false;
-    if(IMM8_MSB(a) ^ IMM8_MSB(b) == 1) cpu->ltu = IMM8_MSB(result);
+    if((IMM8_MSB(a) ^ IMM8_MSB(b)) == 1) cpu->ltu = IMM8_MSB(result);
     if(!(IMM8_MSB(a) | IMM8_MSB(b))) cpu->ltu = true;
 
     if(IMM8_MSB(a) & IMM8_MSB(b)) cpu->lts = true;
-    if(IMM8_MSB(a) ^ IMM8_MSB(b) == 1) cpu->lts = IMM8_MSB(result);
+    if((IMM8_MSB(a) ^ IMM8_MSB(b)) == 1) cpu->lts = IMM8_MSB(result);
     if(!(IMM8_MSB(a) | IMM8_MSB(b))) cpu->lts = false;
 }
 
 void instruction_sbc(struct vcpu_core* cpu, uint16_t instruction) {
-    uint8_t a = INS_SRC1(instruction) & 0xff;
-    uint8_t b = INS_SRC2(instruction) & 0xff;
+    uint8_t a = cpu->gpr[INS_SRC1(instruction)] & 0xff;
+    uint8_t b = cpu->gpr[INS_SRC2(instruction)] & 0xff;
 
-    uint16_t result = (uint16_t)b + (uint16_t)(~a + 1) + (cpu->cf == true ? 1 : 0);
+    uint16_t result = (uint16_t)a + (uint16_t)(~b + 1) + (cpu->cf == true ? 1 : 0);
 
     cpu->gpr[INS_DST(instruction)] = (uint8_t)(result & 0xff);
 
-    cpu->cf = (result >> 8) & 1 == 1;
-    cpu->zf = result & 0xff == 0;
+    cpu->cf = ((result >> 8) & 1) == 1 ? 1 : 0;
+    cpu->zf = (result & 0xff) == 0 ? 1 : 0;
 
     if(IMM8_MSB(a) & IMM8_MSB(b)) cpu->ltu = false;
-    if(IMM8_MSB(a) ^ IMM8_MSB(b) == 1) cpu->ltu = IMM8_MSB(result);
+    if((IMM8_MSB(a) ^ IMM8_MSB(b)) == 1) cpu->ltu = IMM8_MSB(result);
     if(!(IMM8_MSB(a) | IMM8_MSB(b))) cpu->ltu = true;
 
     if(IMM8_MSB(a) & IMM8_MSB(b)) cpu->lts = true;
-    if(IMM8_MSB(a) ^ IMM8_MSB(b) == 1) cpu->lts = IMM8_MSB(result);
+    if((IMM8_MSB(a) ^ IMM8_MSB(b)) == 1) cpu->lts = IMM8_MSB(result);
     if(!(IMM8_MSB(a) | IMM8_MSB(b))) cpu->lts = false;
 }
 
@@ -153,29 +154,31 @@ void instruction_xor(struct vcpu_core* cpu, uint16_t instruction) {cpu->gpr[INS_
 void instruction_in(struct vcpu_core* cpu, uint16_t instruction) {cpu->gpr[INS_DST(instruction)] = cpu->readPort(INS_PID(instruction));}
 void instruction_out(struct vcpu_core* cpu, uint16_t instruction) {cpu->writePort(INS_PID(instruction), cpu->gpr[INS_SRC1(instruction)]);}
 
-void instruction_push(struct vcpu_core* cpu, uint16_t instruction) {cpu->writeMem(++cpu->ss_sp, cpu->gpr[INS_SRC1(instruction)]); cpu->ss_sp &= 0xfff;}
-void instruction_pop(struct vcpu_core* cpu, uint16_t instruction) {cpu->gpr[INS_DST(instruction)] = cpu->readMem(cpu->ss_sp--); cpu->ss_sp &= 0xfff;}
+void instruction_push(struct vcpu_core* cpu, uint16_t instruction) {cpu->writeMem(--cpu->ss_sp, cpu->gpr[INS_SRC1(instruction)]); cpu->ss_sp &= 0xfff;}
+void instruction_pop(struct vcpu_core* cpu, uint16_t instruction) {cpu->gpr[INS_DST(instruction)] = cpu->readMem(cpu->ss_sp++); cpu->ss_sp &= 0xfff;}
 
-void instruction_srldr(struct vcpu_core* cpu, uint16_t instruction) {cpu->gpr[INS_DST(instruction)] = cpu->readMem(((int16_t)(cpu->ss_sp) + (int16_t)INS_IMM8(instruction) & 0xfff));}
+void instruction_srldr(struct vcpu_core* cpu, uint16_t instruction) {cpu->gpr[INS_DST(instruction)] = cpu->readMem((((int16_t)(cpu->ss_sp) + (int16_t)INS_IMM8(instruction)) & 0xfff));}
 void instruction_srstr(struct vcpu_core* cpu, uint16_t instruction) {cpu->writeMem(((int16_t)(cpu->ss_sp) + (int16_t)INS_IMM8(instruction)) & 0xfff, cpu->gpr[INS_SRC1ALT1(instruction)]);}
 
 void instruction_addi(struct vcpu_core* cpu, uint16_t instruction) {
     uint8_t a = INS_IMM8(instruction) & 0xff;
-    uint8_t b = INS_SRC1ALT2(instruction) & 0xff;
+    uint8_t b = cpu->gpr[INS_SRC1ALT2(instruction)] & 0xff;
 
     uint16_t result = (uint16_t)a + (uint16_t)b;
 
+    printf("DEBUG: %i + %i = %i\n", a, b, result);
+
     cpu->gpr[INS_DST(instruction)] = (uint8_t)(result & 0xff);
 
-    cpu->cf = (result >> 8) & 1 == 1;
-    cpu->zf = result & 0xff == 0;
+    cpu->cf = ((result >> 8) & 1) == 1 ? 1 : 0;
+    cpu->zf = (result & 0xff) == 0 ? 1 : 0;
 
     if(IMM8_MSB(a) & IMM8_MSB(b)) cpu->ltu = false;
-    if(IMM8_MSB(a) ^ IMM8_MSB(b) == 1) cpu->ltu = IMM8_MSB(result);
+    if((IMM8_MSB(a) ^ IMM8_MSB(b)) == 1) cpu->ltu = IMM8_MSB(result);
     if(!(IMM8_MSB(a) | IMM8_MSB(b))) cpu->ltu = true;
 
     if(IMM8_MSB(a) & IMM8_MSB(b)) cpu->lts = true;
-    if(IMM8_MSB(a) ^ IMM8_MSB(b) == 1) cpu->lts = IMM8_MSB(result);
+    if((IMM8_MSB(a) ^ IMM8_MSB(b)) == 1) cpu->lts = IMM8_MSB(result);
     if(!(IMM8_MSB(a) | IMM8_MSB(b))) cpu->lts = false;
 }
 
@@ -232,9 +235,75 @@ const struct instruction isa[]= {
     {0b1100000000000000, 0b1100000000000000, &instruction_addi},
 };
 
+#define INS_NUM sizeof(isa) / sizeof(isa[0])
+
+
+#define BYTE_TO_BINARY_PATTERN "%c%c%c%c%c%c%c%c"
+#define BYTE_TO_BINARY(byte)  \
+  ((byte) & 0x80 ? '1' : '0'), \
+  ((byte) & 0x40 ? '1' : '0'), \
+  ((byte) & 0x20 ? '1' : '0'), \
+  ((byte) & 0x10 ? '1' : '0'), \
+  ((byte) & 0x08 ? '1' : '0'), \
+  ((byte) & 0x04 ? '1' : '0'), \
+  ((byte) & 0x02 ? '1' : '0'), \
+  ((byte) & 0x01 ? '1' : '0') 
+
+#define NIBBLE_TO_BINARY_PATTERN "%c%c%c%c"
+#define NIBBLE_TO_BINARY(nibble)  \
+  ((nibble) & 0x08 ? '1' : '0'), \
+  ((nibble) & 0x04 ? '1' : '0'), \
+  ((nibble) & 0x02 ? '1' : '0'), \
+  ((nibble) & 0x01 ? '1' : '0') 
+
+#define IMM12_TO_BINARY_PATTERN "%c%c%c%c%c%c%c%c%c%c%c%c"
+#define IMM12_TO_BINARY(imm12)  \
+  ((imm12) & 0x800 ? '1' : '0'), \
+  ((imm12) & 0x400 ? '1' : '0'), \
+  ((imm12) & 0x200 ? '1' : '0'), \
+  ((imm12) & 0x100 ? '1' : '0'), \
+  ((imm12) & 0x80 ? '1' : '0'), \
+  ((imm12) & 0x40 ? '1' : '0'), \
+  ((imm12) & 0x20 ? '1' : '0'), \
+  ((imm12) & 0x10 ? '1' : '0'), \
+  ((imm12) & 0x08 ? '1' : '0'), \
+  ((imm12) & 0x04 ? '1' : '0'), \
+  ((imm12) & 0x02 ? '1' : '0'), \
+  ((imm12) & 0x01 ? '1' : '0') 
+
+
 void vcore_step(struct vcpu_core* cpu) {
     if(cpu->halted) return;
     uint16_t instruction = 0;
     instruction = cpu->readMem(cpu->pc++);
     instruction |= cpu->readMem(cpu->pc++) << 8;
+
+    for(long unsigned int i = 0; i < INS_NUM; i++) {
+        if((instruction & isa[i].checkMask) == isa[i].opcodeMask) {
+            isa[i].instruction(cpu, instruction);
+            return;
+        }
+    }
+    printf("ILLEGAL INSTRUCTION : 0b" BYTE_TO_BINARY_PATTERN BYTE_TO_BINARY_PATTERN "\n", BYTE_TO_BINARY(instruction >> 8), BYTE_TO_BINARY(instruction & 0xff));
+    cpu->halted = true;
+}
+
+void vcore_dump(struct vcpu_core* cpu) {
+    printf("----------CPU DUMP START----------\n");
+    printf("REGISTERS:\tr0:\t%u\t%x\t0b"BYTE_TO_BINARY_PATTERN"\n", (unsigned int)cpu->gpr[0], cpu->gpr[0], BYTE_TO_BINARY(cpu->gpr[0]));
+    printf("\t\tr1:\t%u\t0x%x\t0b"BYTE_TO_BINARY_PATTERN"\n", (unsigned int)cpu->gpr[1], cpu->gpr[1], BYTE_TO_BINARY(cpu->gpr[1]));
+    printf("\t\tr2:\t%u\t0x%x\t0b"BYTE_TO_BINARY_PATTERN"\n", (unsigned int)cpu->gpr[2], cpu->gpr[2], BYTE_TO_BINARY(cpu->gpr[2]));
+    printf("\t\tr3:\t%u\t0x%x\t0b"BYTE_TO_BINARY_PATTERN"\n", (unsigned int)cpu->gpr[3], cpu->gpr[3], BYTE_TO_BINARY(cpu->gpr[3]));
+    printf("\t\tr4:\t%u\t0x%x\t0b"BYTE_TO_BINARY_PATTERN"\n", (unsigned int)cpu->gpr[4], cpu->gpr[4], BYTE_TO_BINARY(cpu->gpr[4]));
+    printf("\t\tr5:\t%u\t0x%x\t0b"BYTE_TO_BINARY_PATTERN"\n", (unsigned int)cpu->gpr[5], cpu->gpr[5], BYTE_TO_BINARY(cpu->gpr[5]));
+    printf("\t\tr6:\t%u\t0x%x\t0b"BYTE_TO_BINARY_PATTERN"\n", (unsigned int)cpu->gpr[6], cpu->gpr[6], BYTE_TO_BINARY(cpu->gpr[6]));
+    printf("\t\tr7:\t%u\t0x%x\t0b"BYTE_TO_BINARY_PATTERN"\n", (unsigned int)cpu->gpr[7], cpu->gpr[7], BYTE_TO_BINARY(cpu->gpr[7]));
+    printf("\t\tpc:\t%u\t0x%x\t0b"IMM12_TO_BINARY_PATTERN"\n\n", (unsigned int)cpu->pc & 0b111111111111, cpu->pc & 0b111111111111, IMM12_TO_BINARY(cpu->pc & 0b111111111111));
+    printf("\t\tsp:\t%u\t0x%x\t0b"BYTE_TO_BINARY_PATTERN"\n", (unsigned int)cpu->ss_sp & 0xff, cpu->ss_sp & 0xff, BYTE_TO_BINARY(cpu->ss_sp & 0xff));
+    printf("\t\tss:sp:\t%u\t0x%x\t0b"IMM12_TO_BINARY_PATTERN"\n", (unsigned int)cpu->ss_sp & 0b111111111111, cpu->ss_sp & 0b111111111111, IMM12_TO_BINARY(cpu->ss_sp & 0b111111111111));
+    printf("SEGMENTS:\tss:\t%u\t0x%x\t0b"NIBBLE_TO_BINARY_PATTERN"\n", cpu->ss_sp >> 8, cpu->ss_sp >> 8, NIBBLE_TO_BINARY(cpu->ss_sp >> 8));
+    printf("\t\tds:\t%u\t0x%x\t0b"NIBBLE_TO_BINARY_PATTERN"\n", (unsigned int)cpu->ds, cpu->ds, NIBBLE_TO_BINARY(cpu->ds));
+    printf("FLAGS:\tZF: %i\tCF: %i\t LTU: %i\t LTS: %i\n", cpu->zf ? 1 : 0, cpu->cf ? 1 : 0, cpu->ltu ? 1 : 0, cpu->lts ? 1 : 0);
+    printf("MISC:\tZReg: %i\tHALTED: %i\n", cpu->zren ? 1 : 0, cpu->halted ? 1 : 0);
+    printf("-----------CPU DUMP END-----------\n");
 }

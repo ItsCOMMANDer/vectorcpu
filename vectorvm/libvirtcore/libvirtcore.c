@@ -24,7 +24,9 @@ void instruction_nop(struct vcpu_core* cpu __attribute__((unused)), uint16_t ins
 void instruction_halt(struct vcpu_core* cpu, uint16_t instruction __attribute__((unused))) {cpu->halted = true;}
 void instruction_ret(struct vcpu_core* cpu, uint16_t instruction __attribute__((unused))) {
     uint8_t pc_hi = cpu->readMem(cpu->ss_sp++);
+    cpu->ss_sp &= 0xfff;
     uint8_t pc_lo = cpu->readMem(cpu->ss_sp++);
+    cpu->ss_sp &= 0xfff;
     uint16_t new_pc = (pc_hi << 8 | pc_lo) & 0b111111111111;
     cpu->pc = new_pc;
 }
@@ -39,7 +41,9 @@ void instruction_call(struct vcpu_core* cpu, uint16_t instruction) {
     uint8_t pc_hi = (old_pc >> 8) && 0b1111;
     cpu->pc = INS_ADDR(instruction);
     cpu->writeMem(--cpu->ss_sp, pc_lo);
+    cpu->ss_sp &= 0xfff;
     cpu->writeMem(--cpu->ss_sp, pc_hi);
+    cpu->ss_sp &= 0xfff;
 }
 
 void instruction_bltu(struct vcpu_core* cpu, uint16_t instruction) {if(cpu->ltu) {cpu->pc = INS_ADDR(instruction );}}
@@ -227,8 +231,8 @@ const struct instruction isa[]= {
     {0b1111100000000011, 0b1000100000000001, &instruction_or},
     {0b1111100000000011, 0b1000100000000010, &instruction_xor},
     {0b1111100000000000, 0b1010000000000000, &instruction_ldi},
-    {0b1111100000000000, 0b1010100000000000, &instruction_srstr},
-    {0b1111100000000000, 0b1011000000000000, &instruction_srldr},
+    {0b1111100000000000, 0b1010100000000000, &instruction_srldr},
+    {0b1111100000000000, 0b1011000000000000, &instruction_srstr},
     {0b1100000000000000, 0b1100000000000000, &instruction_addi},
 };
 

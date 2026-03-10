@@ -5,6 +5,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include <math.h>
+
 #include <string.h>
 
 uint8_t *ram;
@@ -20,38 +22,71 @@ void implWriteMem(uint16_t addr, uint8_t val) {
     ram[addr & 0b111111111111] = val;
 }
 
+
+#define FIB 16
+#define ZC 48
+#define OC 54
+
 uint16_t program[] = {
-    MKI_LDI(REG_R0, 42),
-    MKI_ENZR(),
-    MKI_MOV(REG_R1, REG_R0),
-    MKI_DSZR(),
-    MKI_MOV(REG_R2, REG_R0),
-    MKI_HALT(),
+/* 00 */    MKI_LDI(REG_R1, 0xff),
+/* 02 */    MKI_WRSS(REG_R1),
+/* 04 */    MKI_WRSP(REG_R1),
+/* 06 */    MKI_LDI(REG_R1, 0x0f),
+/* 08 */    MKI_WRDS(REG_R1),
+/* 10 */    MKI_LDI(REG_R0, 24),
+/* 12 */    MKI_CALL(FIB),
+/* 14 */    MKI_HALT(),
+/* 16 FIB*/ MKI_ADDI(REG_R0, REG_R0, 0),
+/* 18 */    MKI_BEQ(ZC),
+/* 20 */    MKI_ADDI(REG_R0, REG_R0, 0xff),
+/* 22 */    MKI_BEQ(OC),
+/* 24 */    MKI_PUSH(REG_R0),
+/* 26 */    MKI_CALL(FIB),
+/* 28 */    MKI_POP(REG_R0),
+/* 30 */    MKI_PUSH(REG_R1),
+/* 32 */    MKI_PUSH(REG_R2),
+/* 34 */    MKI_ADDI(REG_R0, REG_R0, 0xff),
+/* 36 */    MKI_CALL(FIB),
+/* 38 */    MKI_POP(REG_R4), 
+/* 40 */    MKI_POP(REG_R3),
+/* 42 */    MKI_ADD(REG_R1, REG_R1, REG_R3),
+/* 44 */    MKI_ADC(REG_R2, REG_R2, REG_R4),
+/* 46 */    MKI_RET(),
+/* 48 ZC*/  MKI_LDI(REG_R1, 0),
+/* 50 */    MKI_LDI(REG_R2, 0),
+/* 52 */    MKI_RET(),
+/* 54 OC*/  MKI_LDI(REG_R1, 1),
+/* 56 */    MKI_LDI(REG_R2, 0),
+/* 58 */    MKI_RET(),
 };
 
 uint16_t fib[] = {
-/* 00 */ MKI_LDI(REG_R1, 13),
-/* 02 */ MKI_CALL(6),
-/* 04 */ MKI_HALT(),
-/* 06 fib: */ MKI_ADDI(REG_R2, REG_R1, 0),
-/* 08 */ MKI_BEQ(32),
-/* 10 */ MKI_ADDI(REG_R1, REG_R1, 0xff),
-/* 12 */ MKI_BEQ(36),
-/* 14 */ MKI_PUSH(REG_R1),
-/* 16 */ MKI_CALL(6),
-/* 18 */ MKI_POP(REG_R1),
-/* 20 */ MKI_PUSH(REG_R0),
-/* 22 */ MKI_ADDI(REG_R1, REG_R1, 0xff),
-/* 24 */ MKI_CALL(6),
-/* 26 */ MKI_POP(REG_R1),
-/* 28 */ MKI_ADD(REG_R0, REG_R0, REG_R1),
-/* 30 */ MKI_RET(),
-/* 32 zc: */ MKI_LDI(REG_R0, 0),
-/* 34 */ MKI_RET(),
-/* 36 oc: */ MKI_LDI(REG_R0, 1),
-/* 38 */ MKI_RET()
+/* 00 */ MKI_LDI(REG_R1, 0xff),
+/* 02 */ MKI_WRSS(REG_R1),
+/* 04 */ MKI_WRSP(REG_R1),
+/* 06 */ MKI_LDI(REG_R1, 20),
+/* 08 */ MKI_CALL(12),
+/* 10 */ MKI_HALT(),
+/* 12 fib: */ MKI_ADDI(REG_R2, REG_R1, 0),
+/* 14 */ MKI_BEQ(38),
+/* 16 */ MKI_ADDI(REG_R1, REG_R1, 0xff),
+/* 18 */ MKI_BEQ(42),
+/* 20 */ MKI_PUSH(REG_R1),
+/* 22 */ MKI_CALL(12),
+/* 24 */ MKI_POP(REG_R1),
+/* 26 */ MKI_PUSH(REG_R0),
+/* 28 */ MKI_ADDI(REG_R1, REG_R1, 0xff),
+/* 30 */ MKI_CALL(12),
+/* 32 */ MKI_POP(REG_R1),
+/* 34 */ MKI_ADD(REG_R0, REG_R0, REG_R1),
+/* 36 */ MKI_RET(),
+/* 38 zc: */ MKI_LDI(REG_R0, 0),
+/* 40 */ MKI_RET(),
+/* 42 oc: */ MKI_LDI(REG_R0, 1),
+/* 44 */ MKI_RET()
 };
 
+#define MIN(a,b) (((a)<(b))?(a):(b))
 
 int main(int argc, char** argv) {
     printf("VectorVM  v0.0.0\n");
@@ -82,7 +117,7 @@ int main(int argc, char** argv) {
     memcpy(ram, &program, sizeof(program));
 
     //vcore_dump(&core);
- 
+
     while(!core.halted) {
         //getchar();
         vcore_step(&core);
@@ -91,6 +126,8 @@ int main(int argc, char** argv) {
     }
 
     vcore_dump(&core);
+
+    printf("THE FIB: %i\n", (uint16_t)((uint16_t)core.gpr[1] | (uint16_t)(core.gpr[2] << 8)));
 
     return 0;
 }

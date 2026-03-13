@@ -1,4 +1,4 @@
-#include "libvirtcore.h"
+#include "virtcore.h"
 
 #include <stdio.h>
 #include <stdint.h>

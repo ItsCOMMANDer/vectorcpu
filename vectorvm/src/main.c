@@ -1,4 +1,4 @@
-#include "../libvirtcore/libvirtcore.h"
+#include "virtcore.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -33,7 +33,7 @@ uint16_t program[] = {
 /* 04 */    MKI_WRSP(REG_R1),
 /* 06 */    MKI_LDI(REG_R1, 0x0f),
 /* 08 */    MKI_WRDS(REG_R1),
-/* 10 */    MKI_LDI(REG_R0, 24),
+/* 10 */    MKI_LDI(REG_R0, 30),
 /* 12 */    MKI_CALL(FIB),
 /* 14 */    MKI_HALT(),
 /* 16 FIB*/ MKI_ADDI(REG_R0, REG_R0, 0),
@@ -86,7 +86,7 @@ uint16_t fib[] = {
 /* 44 */ MKI_RET()
 };
 
-#define MIN(a,b) (((a)<(b))?(a):(b))
+#define MAX(a,b) (((a)>(b))?(a):(b))
 
 int main(int argc, char** argv) {
     printf("VectorVM  v0.0.0\n");
@@ -116,8 +116,6 @@ int main(int argc, char** argv) {
 
     memcpy(ram, &program, sizeof(program));
 
-    //vcore_dump(&core);
-
     while(!core.halted) {
         //getchar();
         vcore_step(&core);
@@ -126,8 +124,6 @@ int main(int argc, char** argv) {
     }
 
     vcore_dump(&core);
-
-    printf("THE FIB: %i\n", (uint16_t)((uint16_t)core.gpr[1] | (uint16_t)(core.gpr[2] << 8)));
 
     return 0;
 }

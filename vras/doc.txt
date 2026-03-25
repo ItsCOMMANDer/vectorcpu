@@ -1,0 +1,12 @@
+Assmbler stuff:
+
+@offset specify offset the code will be at in ram (nasm equivilant of .org)
+
+#include
+#define
+#ifdef
+#ifndef
+#else
+#endif
+#elifdef
+#elifndef

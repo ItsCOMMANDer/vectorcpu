@@ -1,5 +1,7 @@
 CC := gcc
-CFLAGS := -Wall -Wextra -O2
+CFLAGS := -Wall -Wextra -Werror -g -fsanitize=address -fsanitize=undefined
+LDFAGS := -fsanitize=address -fsanitize=undefined
+
 SRC_DIR := src
 OBJ_DIR := build
 TARGET := vras
@@ -10,7 +12,7 @@ OBJS := $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(SRCS))
 all: $(TARGET)
 
 $(TARGET): $(OBJS)
-	$(CC) $(OBJS) -o $@
+	$(CC) $(OBJS) -o $@ $(LDFAGS)
 
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c | $(OBJ_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@

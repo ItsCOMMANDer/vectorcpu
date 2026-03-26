@@ -97,7 +97,7 @@ void ll_remove(struct ll_head* head, size_t idx) {
     struct ll_node *cur = ll_get(head, idx);
     if(cur == NULL) return;
     
-    head->delete(cur->data);
+    if(head->delete != NULL) head->delete(cur->data);
     
     if (cur->prev != NULL) {
         cur->prev->next = cur->next;
@@ -118,14 +118,5 @@ void ll_remove(struct ll_head* head, size_t idx) {
 
 void ll_delete(struct ll_head* head) {
     if(head == NULL) return;
-    struct ll_node *cur = head->start;
-    while(cur != NULL) {
-        struct ll_node *next = cur->next;
-        head->delete(cur->data);
-        free(cur);
-        cur = next;
-    }
-    head->len = 0;
-    head->start = NULL;
-    head->end = NULL;
+    while(head->len > 0) {ll_remove(head, 0);}
 }

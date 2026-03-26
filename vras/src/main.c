@@ -17,6 +17,11 @@ struct srcCodeLine {
     char* file;
 };
 
+struct macro {
+    char* macroName;
+    char* replacement;
+};
+
 char* stripTrailingSlash(char *path) {
     size_t len = strlen(path);
     char* str = strdup(path);
@@ -56,6 +61,34 @@ char* resolveInIncludes(const char* file, const struct ll_head* includes) {
     return NULL;
 }
 
+char* stripWhitespace(const char* str, size_t len) {
+    char* wsStripped = calloc(len + 1, sizeof(char));
+    size_t wssIdx = 0;
+
+    bool inQuote = false;
+
+    for(size_t i = 0; i < len; i++) {
+        if((str[i] != ' ' && str[i] != '\t') || inQuote) {
+            wsStripped[++wssIdx - 1] = str[i];
+            if(str[i] == '\"') inQuote = !inQuote;
+            continue;
+        } else {
+            if(wsStripped[wssIdx - 1] == ' ') {
+                continue;
+            } else {
+                wsStripped[++wssIdx - 1] = ' ';
+            }
+        }
+    }
+    if(wsStripped[wssIdx - 1] == ' ') wsStripped[wssIdx-- -1] = '\0';
+    if(wsStripped[0] == ' ') {
+        char* tmp = strdup(&wsStripped[1]);
+        free(wsStripped);
+        wsStripped = tmp;
+    }
+    return wsStripped;
+}
+
 #define RESET   "\033[0m"
 #define BLACK   "\033[30m"
 #define RED     "\033[31m"
@@ -66,85 +99,53 @@ char* resolveInIncludes(const char* file, const struct ll_head* includes) {
 #define CYAN    "\033[36m"
 #define WHITE   "\033[37m"
 
-void preprocess(struct ll_head* head, struct ll_head* includes) {
+void preprocess(struct ll_head* head, struct ll_head* includes, __attribute__((unused)) struct ll_head* macros) {
     for(size_t idx = 0; idx < head->len; idx++) {
         struct ll_node *srcLineNode_tmp = ll_get(head, idx);
         struct srcCodeLine *srcLine = srcLineNode_tmp->data;
-        if(srcLine != NULL && srcLine->str_len > 1 && srcLine->str[0] == '#') {
-            if(srcLine->str_len > 9 && strncmp("#include ", srcLine->str, 9) == 0) {
-                //    open file
-                //    read each line an appendAfter $idx
-                //    delete node $idx
-                char* wsStripped = calloc(srcLine->str_len + 1, 1);
-                size_t wssIdx = 0;
+        if(srcLine == NULL || srcLine->str_len <= 1 || srcLine->str[0] != '#') continue;
+        if(srcLine->str_len > 9 && strncmp("#include ", srcLine->str, 9) == 0) {
+            //    open file
+            //    read each line an appendAfter $idx
+            //    delete node $idx
+            char* wsStripped = stripWhitespace(srcLine->str, srcLine->str_len);
 
-                bool inQuote = false;
-
-                for(size_t i = 0; i < srcLine->str_len; i++) {
-                    if((srcLine->str[i] != ' ' && srcLine->str[i] != '\t') || inQuote) {
-                        wsStripped[++wssIdx - 1] = srcLine->str[i];
-                        if(srcLine->str[i] == '\"') inQuote = !inQuote;
-                        continue;
-                    } else {
-                        if(wsStripped[wssIdx - 1] == ' ') {
-                            continue;
-                        } else {
-                            wsStripped[++wssIdx - 1] = ' ';
-                        }
-                    }
-                }
-                if(wsStripped[wssIdx - 1] == ' ') wsStripped[wssIdx-- -1] = '\0';
-                if((wsStripped[9] != '\"' || wsStripped[wssIdx - 1] != '\"') && (wsStripped[9] != '<' || wsStripped[wssIdx - 1] != '>')) {
-                    printf("Illegal Include. Name of included file must be put <> or \"\"\n");
-                }
-                char* includedFile_name = calloc(strlen(wsStripped) - 10, 1);
-                strncpy(includedFile_name, &wsStripped[10], strlen(wsStripped) - 11);
+            if((wsStripped[9] != '\"' || wsStripped[strlen(wsStripped) - 1] != '\"') && (wsStripped[9] != '<' || wsStripped[strlen(wsStripped) - 1] != '>')) {
+                printf("Illegal Include. Name of included file must be put <> or \"\"\n");
+            }
+            char* includedFile_name = calloc(strlen(wsStripped) - 10, 1);
+            strncpy(includedFile_name, &wsStripped[10], strlen(wsStripped) - 11);
                 
-               char *includedFile_path = NULL;
-               if(wsStripped[9] == '\"') {
-                   if(wsStripped[10] != '/') includedFile_path = resolveRelPath(srcLine->file, false, includedFile_name);
-                   else includedFile_path = strdup(includedFile_name);
-                } else {
-                    includedFile_path = resolveInIncludes(includedFile_name, includes);
-                }
-                free(wsStripped);
+            char *includedFile_path = NULL;
+            if(wsStripped[9] == '\"') {
+               if(wsStripped[10] != '/') includedFile_path = resolveRelPath(srcLine->file, false, includedFile_name);
+                else includedFile_path = strdup(includedFile_name);
+            } else {
+                includedFile_path = resolveInIncludes(includedFile_name, includes);
+            }
+            free(wsStripped);
 
-                FILE* includedFile_fd = fopen(includedFile_path, "r");
-                if(includedFile_fd == NULL) {
-                    printf("Error opening file\n");
-                }
-                fseek(includedFile_fd, 0, SEEK_END);
-                size_t includedFile_len = ftell(includedFile_fd);
-                rewind(includedFile_fd);
+            FILE* includedFile_fd = fopen(includedFile_path, "r");
+            if(includedFile_fd == NULL) {
+                printf("Error opening file\n");
+            }
+            fseek(includedFile_fd, 0, SEEK_END);
+            size_t includedFile_len = ftell(includedFile_fd);
+            rewind(includedFile_fd);
 
-                char* includedFile_buf = calloc(includedFile_len + 1, sizeof(char));
-                fread(includedFile_buf, sizeof(char), includedFile_len, includedFile_fd);
+            char* includedFile_buf = calloc(includedFile_len + 1, sizeof(char));
+            fread(includedFile_buf, sizeof(char), includedFile_len, includedFile_fd);
 
-                fclose(includedFile_fd);
+            fclose(includedFile_fd);
 
-                ll_remove(head, idx);
+            ll_remove(head, idx);
 
-                {
-                    size_t lineNr = 1;
-                    size_t iF_idx = 0;
-                    size_t charCount = 0;
-                    while(includedFile_buf[iF_idx] != '\0') {
-                        if(includedFile_buf[iF_idx] == '\n') {
-                            char* line = calloc(charCount + 1, 1);
-                            strncpy(line, &includedFile_buf[iF_idx - charCount], charCount);
-
-                            struct srcCodeLine* srcLine = calloc(1, sizeof(struct srcCodeLine));
-                            srcLine->str = line;
-                            srcLine->str_len = charCount;
-                            srcLine->file = strdup(includedFile_path);
-                            srcLine->line = lineNr++;
-                
-                            ll_insertBefore(head, idx++, srcLine);
-                            charCount = 0;
-                        } else charCount++;
-                        iF_idx++;
-                    }
-                    if(charCount > 0) {
+            {
+                size_t lineNr = 1;
+                size_t iF_idx = 0;
+                size_t charCount = 0;
+                while(includedFile_buf[iF_idx] != '\0') {
+                    if(includedFile_buf[iF_idx] == '\n') {
                         char* line = calloc(charCount + 1, 1);
                         strncpy(line, &includedFile_buf[iF_idx - charCount], charCount);
 
@@ -153,20 +154,76 @@ void preprocess(struct ll_head* head, struct ll_head* includes) {
                         srcLine->str_len = charCount;
                         srcLine->file = strdup(includedFile_path);
                         srcLine->line = lineNr++;
-                    
+                
                         ll_insertBefore(head, idx++, srcLine);
                         charCount = 0;
-                    }
+                    } else charCount++;
+                    iF_idx++;
                 }
+                if(charCount > 0) {
+                    char* line = calloc(charCount + 1, 1);
+                    strncpy(line, &includedFile_buf[iF_idx - charCount], charCount);
 
-                idx--;
-
-                free(includedFile_buf);
-
-                free(includedFile_name);
-                free(includedFile_path);
-
+                    struct srcCodeLine* srcLine = calloc(1, sizeof(struct srcCodeLine));
+                    srcLine->str = line;
+                    srcLine->str_len = charCount;
+                    srcLine->file = strdup(includedFile_path);
+                    srcLine->line = lineNr++;
+                    
+                    ll_insertBefore(head, idx++, srcLine);
+                    charCount = 0;
+                }
             }
+
+            idx--;
+
+            free(includedFile_buf);
+
+            free(includedFile_name);
+            free(includedFile_path);
+
+            continue;
+        }
+        
+        if(srcLine->str_len > 8 && strncmp("#define ", srcLine->str, 8) == 0) {
+            char* macro_str = strdup(&srcLine->str[8]);
+
+            struct macro* currentMacro = calloc(1, sizeof(struct macro));
+
+            size_t macroName_len = 0;
+            while(macro_str[macroName_len++] != ' ') {;;}
+
+            currentMacro->macroName = strndup(macro_str, --macroName_len);
+
+            if(macro_str[macroName_len] != '\0') {
+                currentMacro->replacement = strdup(&macro_str[macroName_len + 1]);
+            }
+
+            for(size_t i = 0; i < macros->len; i++) {
+                struct macro* cur = ll_get(macros, i)->data;
+                if(strcmp(cur->macroName, currentMacro->macroName) == 0) {
+                    ll_remove(macros, i);
+                    break;
+                }
+            }
+
+            ll_append(macros, currentMacro);
+
+            free(macro_str);
+            continue;
+        }
+
+        if(srcLine->str_len > 7 && strncmp("#undef ", srcLine->str, 7) == 0) {
+            char* macroName = strdup(&srcLine->str[7]);
+            for(size_t i = 0; i < macros->len; i++) {
+                struct macro* cur = ll_get(macros, i)->data;
+                if(strcmp(cur->macroName, macroName) == 0) {
+                    ll_remove(macros, i);
+                    break;
+                }
+            }
+            free(macroName);
+            continue;
         }
     }
 }
@@ -181,6 +238,13 @@ void srcCodeLine_delete(void* data) {
 void includes_delete(void* data) {
     char* include = data;
     free(include);
+}
+
+void macros_delete(void* data) {
+    struct macro* macros = data;
+    if(macros->macroName != NULL) free(macros->macroName);
+    if(macros->replacement != NULL) free(macros->replacement);
+    free(macros);
 }
 
 int main(int __attribute__((unused)) argc, char __attribute__((unused)) **argv) {
@@ -256,14 +320,27 @@ int main(int __attribute__((unused)) argc, char __attribute__((unused)) **argv) 
 
     free(inputFile_buffer);
 
-    preprocess(&srcCode_llhead, &includes_llhead);
+    struct ll_head macros_llhead = {
+        .start = NULL,
+        .end = NULL,
+        .len = 0,
+        .delete = macros_delete,
+    };
+
+    preprocess(&srcCode_llhead, &includes_llhead, &macros_llhead);
 
     for(struct ll_node* cur = srcCode_llhead.start; cur != NULL; cur = cur->next) {
         printf("%s\n", ((struct srcCodeLine*)cur->data)->str);
     }
 
+    printf("-------------MACROS-------------\n");
+    for(struct ll_node* cur = macros_llhead.start; cur != NULL; cur = cur->next) {
+        printf("%s -> %s\n", ((struct macro*)cur->data)->macroName, ((struct macro*)cur->data)->replacement);
+    }
+
     ll_delete(&srcCode_llhead);
     ll_delete(&includes_llhead);
+    ll_delete(&macros_llhead);
 }
 
 /*

@@ -382,10 +382,7 @@ int main(int __attribute__((unused)) argc, char __attribute__((unused)) **argv) 
         .delete = includes_delete,
     };
 
-    char *incl_tmp = strdup("/home/niklas/Desktop/projects/C/vectorcpu/vras/asm/include");
-    ll_append(&includes_llhead, incl_tmp);
-
-    const char inputFile_name[] = "./asm/test.as";
+    const char inputFile_name[] = "./asm/test.asm";
 
     FILE* inputFile_fd = fopen(inputFile_name, "r");
     if(inputFile_fd == NULL) {

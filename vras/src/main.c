@@ -99,6 +99,20 @@ char* stripWhitespace(const char* str, size_t len) {
 #define CYAN    "\033[36m"
 #define WHITE   "\033[37m"
 
+/*
+(DONE) #include
+
+#embed
+
+(DONE) #define
+(DONE) #undef
+
+(DONE) #ifdef
+(DONE) #ifndef
+(maybe not?) #else
+(DONE) #endif
+*/
+
 void preprocess(struct ll_head* head, struct ll_head* includes, __attribute__((unused)) struct ll_head* macros) {
     for(size_t idx = 0; idx < head->len; idx++) {
         struct ll_node *srcLineNode_tmp = ll_get(head, idx);
@@ -209,6 +223,8 @@ void preprocess(struct ll_head* head, struct ll_head* includes, __attribute__((u
 
             ll_append(macros, currentMacro);
 
+            ll_remove(head, idx--);
+
             free(macro_str);
             continue;
         }
@@ -222,6 +238,115 @@ void preprocess(struct ll_head* head, struct ll_head* includes, __attribute__((u
                     break;
                 }
             }
+
+            ll_remove(head, idx--);
+
+            free(macroName);
+            continue;
+        }
+
+/*
+ *
+ * Ifdef schenanigens
+ * increment stack: ifdef ifndef
+ * decrement stack: endif
+ *
+ */
+
+        if(srcLine->str_len > 7 && strncmp("#ifdef ", srcLine->str, 7) == 0) {
+            char* macroName = strdup(&srcLine->str[7]);
+            
+            bool removeCode = true;
+
+            for(size_t i = 0; i < macros->len; i++) {
+                struct macro* cur = ll_get(macros, i)->data;
+                if(strcmp(cur->macroName, macroName) == 0) {
+                    removeCode = false;
+                    printf(GREEN"SET NOT DEL TO TRUE"RESET"\n");
+                    break;
+                }
+            }
+
+            size_t conditionalPreproStack = 1;
+            ll_remove(head, idx);
+
+            size_t retIdx = idx;
+
+            while(conditionalPreproStack > 0 || idx < head->len) {
+                printf(RED"Stack depth: %lu"RESET"\n", conditionalPreproStack);
+                struct srcCodeLine* cur = ll_get(head, idx)->data;
+                printf(BLUE"PROCESSING : \"%s\" -> "RESET, cur->str);
+
+                if(strncmp(cur->str, "#ifdef ", 7) == 0 ||
+                   strncmp(cur->str, "#ifndef ", 8) == 0) {
+                    conditionalPreproStack++;
+                    printf("inced\n");
+                }
+
+                if(strncmp(cur->str, "#endif", 6) == 0) {
+                    conditionalPreproStack--;
+                    printf("deced\n");
+                    if(conditionalPreproStack == 0) {
+                        ll_remove(head, idx);
+                        break;
+                    }
+                }
+
+                if(removeCode == true) ll_remove(head, idx);
+                else idx++;
+            }
+
+            idx = --retIdx;
+
+            free(macroName);
+            continue;
+        }
+
+        if(srcLine->str_len > 7 && strncmp("#ifndef ", srcLine->str, 8) == 0) {
+            char* macroName = strdup(&srcLine->str[8]);
+            
+            bool removeCode = false;
+
+            for(size_t i = 0; i < macros->len; i++) {
+                struct macro* cur = ll_get(macros, i)->data;
+                if(strcmp(cur->macroName, macroName) == 0) {
+                    removeCode = true;
+                    printf(GREEN"SET DEL TO TRUE"RESET"\n");
+                    break;
+                }
+            }
+
+            size_t conditionalPreproStack = 1;
+            ll_remove(head, idx);
+
+            size_t retIdx = idx;
+
+            while(conditionalPreproStack > 0 || idx < head->len) {
+                printf(RED"Stack depth: %lu"RESET"\n", conditionalPreproStack);
+                struct srcCodeLine* cur = ll_get(head, idx)->data;
+                printf(BLUE"PROCESSING : \"%s\" -> "RESET, cur->str);
+
+                if(strncmp(cur->str, "#ifdef ", 7) == 0 ||
+                   strncmp(cur->str, "#ifndef ", 8) == 0) {
+                    conditionalPreproStack++;
+                    printf("inced\n");
+                }
+
+                if(strncmp(cur->str, "#endif", 6) == 0) {
+                    conditionalPreproStack--;
+                    printf("deced\n");
+                    if(conditionalPreproStack == 0) {
+                        ll_remove(head, idx);
+                        break;
+                    }
+                }
+
+                if(removeCode == true) ll_remove(head, idx);
+                else idx++;
+            }
+
+            idx = --retIdx;
+
             free(macroName);
             continue;
         }

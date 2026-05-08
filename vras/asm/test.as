@@ -1,11 +1,13 @@
-//#include <bigint.as>
-//#include       "incl.as"
-//#include    "dir/nestedIncl.as"
+#include <bigint.as>
+#include       "incl.as"
+#include    "dir/nestedIncl.as"
 
 #define PI 3.14159265358979323
 #define PI 2*3.14159265358979323
 
+#ifdef PI
 #undef PI
+#endif
 
 @offset 0x0
 start:

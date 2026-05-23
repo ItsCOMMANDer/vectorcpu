@@ -1,6 +1,8 @@
-#include <bigint.as>
-#include       "incl.as"
-#include    "dir/nestedIncl.as"
+//#include <bigint.asm>
+#include "include/bigint.asm"
+#include "include/bigint.asm"
+#include       "incl.asm"
+#include    "dir/nestedIncl.asm"
 
 #define PI 3.14159265358979323
 #define PI 2*3.14159265358979323

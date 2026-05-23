@@ -57,6 +57,7 @@ char* resolveInIncludes(const char* file, const struct ll_head* includes) {
         if(access(tmp, R_OK) == 0) {
             return tmp;
         }
+        printf("check on \"%s\" failed\n", tmp);
     }
     return NULL;
 }
@@ -141,7 +142,9 @@ void preprocess(struct ll_head* head, struct ll_head* includes, __attribute__((u
 
             FILE* includedFile_fd = fopen(includedFile_path, "r");
             if(includedFile_fd == NULL) {
-                printf("Error opening file\n");
+                printf("Error opening file \"%s\"\n", resolveInIncludes(includedFile_name, includes));
+                ll_remove(head, idx--);
+                continue;
             }
             fseek(includedFile_fd, 0, SEEK_END);
             size_t includedFile_len = ftell(includedFile_fd);

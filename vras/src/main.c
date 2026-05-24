@@ -9,6 +9,7 @@
 
 #include "linkedList.h"
 
+void srcCodeLine_delete(void* data);
 
 struct srcCodeLine {
     char* str;
@@ -112,6 +113,9 @@ char* stripWhitespace(const char* str, size_t len) {
 (DONE) #ifndef
 (maybe not?) #else
 (DONE) #endif
+
+How to macro expansions:
+macro name = uninterrupted sequnce of a-z, A-Z, 0-9, "-", "_", and $
 */
 
 void preprocess(struct ll_head* head, struct ll_head* includes, __attribute__((unused)) struct ll_head* macros) {
@@ -155,7 +159,14 @@ void preprocess(struct ll_head* head, struct ll_head* includes, __attribute__((u
 
             fclose(includedFile_fd);
 
-            ll_remove(head, idx);
+            ll_remove(head, idx); 
+
+            struct ll_head newFile_head = {
+                .start = NULL,
+                .end = NULL,
+                .len = 0,
+                .delete = srcCodeLine_delete,
+            };
 
             {
                 size_t lineNr = 1;
@@ -172,7 +183,7 @@ void preprocess(struct ll_head* head, struct ll_head* includes, __attribute__((u
                         srcLine->file = strdup(includedFile_path);
                         srcLine->line = lineNr++;
                 
-                        ll_insertBefore(head, idx++, srcLine);
+                        ll_append(&newFile_head, srcLine);
                         charCount = 0;
                     } else charCount++;
                     iF_idx++;
@@ -187,34 +198,59 @@ void preprocess(struct ll_head* head, struct ll_head* includes, __attribute__((u
                     srcLine->file = strdup(includedFile_path);
                     srcLine->line = lineNr++;
                     
-                    ll_insertBefore(head, idx++, srcLine);
+                    ll_append(&newFile_head, srcLine);
                     charCount = 0;
                 }
             }
 
-            idx--;
+            for(struct ll_node* cur = newFile_head.end; cur != NULL; cur = cur->prev) {
+                struct srcCodeLine* srcLine = calloc(1, sizeof(struct srcCodeLine));
+                struct srcCodeLine* curSrcLine = (struct srcCodeLine*)(cur->data);
+                srcLine->str = strdup(curSrcLine->str);
+                srcLine->str_len = curSrcLine->str_len;
+                srcLine->file = strdup(curSrcLine->file);
+                srcLine->line = curSrcLine->line;
+                ll_insertAs(head, idx, srcLine);
+            }
+
+            ll_delete(&newFile_head);
 
             free(includedFile_buf);
 
             free(includedFile_name);
             free(includedFile_path);
 
+            idx--;
+
             continue;
         }
         
         if(srcLine->str_len > 8 && strncmp("#define ", srcLine->str, 8) == 0) {
-            char* macro_str = strdup(&srcLine->str[8]);
-
             struct macro* currentMacro = calloc(1, sizeof(struct macro));
 
-            size_t macroName_len = 0;
-            while(macro_str[macroName_len++] != ' ') {;;}
-
-            currentMacro->macroName = strndup(macro_str, --macroName_len);
-
-            if(macro_str[macroName_len] != '\0') {
-                currentMacro->replacement = strdup(&macro_str[macroName_len + 1]);
+            char* macroNameStart = &srcLine->str[8];
+            while(macroNameStart[0] == ' ' || macroNameStart[0] == '\t') {
+                macroNameStart++;
             }
+
+            size_t macroNameStart_len = 0;
+            while(macroNameStart[macroNameStart_len] != ' '  &&
+                  macroNameStart[macroNameStart_len] != '\t' &&
+                  macroNameStart[macroNameStart_len] != '\0')   macroNameStart_len++;
+
+            currentMacro->macroName = strndup(macroNameStart, macroNameStart_len);
+
+            char* macroReplacementStart = &macroNameStart[macroNameStart_len];
+            while(macroReplacementStart[0] == ' ' || macroReplacementStart[0] == '\t') {
+                macroReplacementStart++;
+            }
+
+            size_t macroReplacementStart_len = 0;
+            while(macroReplacementStart[macroReplacementStart_len] != ' '  &&
+                  macroReplacementStart[macroReplacementStart_len] != '\t' &&
+                  macroReplacementStart[macroReplacementStart_len] != '\0') macroReplacementStart_len++;
+
+            currentMacro->replacement = strndup(macroReplacementStart, macroReplacementStart_len);
 
             for(size_t i = 0; i < macros->len; i++) {
                 struct macro* cur = ll_get(macros, i)->data;
@@ -228,7 +264,6 @@ void preprocess(struct ll_head* head, struct ll_head* includes, __attribute__((u
 
             ll_remove(head, idx--);
 
-            free(macro_str);
             continue;
         }
 
@@ -306,6 +341,7 @@ void preprocess(struct ll_head* head, struct ll_head* includes, __attribute__((u
         }
 
         if(srcLine->str_len > 7 && strncmp("#ifndef ", srcLine->str, 8) == 0) {
+            printf("IFNDEF IN FILE \"%s\" line %lu (idx %lu)\n", srcLine->file, srcLine->line, idx);
             char* macroName = strdup(&srcLine->str[8]);
             
             bool removeCode = false;
@@ -313,10 +349,12 @@ void preprocess(struct ll_head* head, struct ll_head* includes, __attribute__((u
             for(size_t i = 0; i < macros->len; i++) {
                 struct macro* cur = ll_get(macros, i)->data;
                 if(strcmp(cur->macroName, macroName) == 0) {
+                    printf("\"%s\" == \"%s\"\n", cur->macroName, macroName);
                     removeCode = true;
                     printf(GREEN"SET DEL TO TRUE"RESET"\n");
                     break;
                 }
+                printf("\"%s\" != \"%s\"\n", cur->macroName, macroName);
             }
 
             size_t conditionalPreproStack = 1;
@@ -460,7 +498,7 @@ int main(int __attribute__((unused)) argc, char __attribute__((unused)) **argv) 
 
     printf("-------------MACROS-------------\n");
     for(struct ll_node* cur = macros_llhead.start; cur != NULL; cur = cur->next) {
-        printf("%s -> %s\n", ((struct macro*)cur->data)->macroName, ((struct macro*)cur->data)->replacement);
+        printf("\"%s\" -> \"%s\"\n", ((struct macro*)cur->data)->macroName, ((struct macro*)cur->data)->replacement);
     }
 
     ll_delete(&srcCode_llhead);

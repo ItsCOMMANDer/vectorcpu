@@ -24,6 +24,10 @@ void ll_append(struct ll_head* head, void* data) {
 
 void ll_insertAfter(struct ll_head* head, size_t idx, void* data) {
     if(head == NULL) return;
+    if(head->start == NULL) {
+        ll_append(head, data);
+        return;
+    }
     struct ll_node *cur = head->start;
 
     size_t curIdx = 0;
@@ -43,6 +47,7 @@ void ll_insertAfter(struct ll_head* head, size_t idx, void* data) {
     newNode->next = cur->next;
     if(cur->next != NULL) cur->next->prev = newNode;
     cur->next = newNode;
+    if(newNode->next == NULL) head->end = newNode;
 
     head->len++;
 }
@@ -75,6 +80,13 @@ void ll_insertBefore(struct ll_head* head, size_t idx, void* data) {
     head->len++;
 }
 
+void ll_insertAs(struct ll_head* head, size_t idx, void* data) {
+    if(idx == 0) {
+        ll_append(head, data);
+    } else {
+        ll_insertBefore(head, idx, data);
+    }
+}
 
 struct ll_node* ll_get(struct ll_head *head, size_t idx) {
     if(head == NULL) return NULL;

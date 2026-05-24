@@ -20,6 +20,7 @@ struct ll_node {
 void ll_append(struct ll_head* head, void* data);
 void ll_insertAfter(struct ll_head* head, size_t idx, void* data);
 void ll_insertBefore(struct ll_head* head, size_t idx, void* data);
+void ll_insertAs(struct ll_head* head, size_t idx, void* data);
 struct ll_node* ll_get(struct ll_head *head, size_t idx);
 void ll_remove(struct ll_head* head, size_t idx);
 void ll_delete(struct ll_head* head);

@@ -115,7 +115,7 @@ char* stripWhitespace(const char* str, size_t len) {
 (DONE) #endif
 
 How to macro expansions:
-macro name = uninterrupted sequnce of a-z, A-Z, 0-9, "-", "_", and $
+macro name = uninterrupted sequnce of a-z, A-Z, 0-9, or "_"
 */
 
 void preprocess(struct ll_head* head, struct ll_head* includes, __attribute__((unused)) struct ll_head* macros) {

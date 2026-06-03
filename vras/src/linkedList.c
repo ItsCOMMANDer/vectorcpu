@@ -81,7 +81,7 @@ void ll_insertBefore(struct ll_head* head, size_t idx, void* data) {
 }
 
 void ll_insertAs(struct ll_head* head, size_t idx, void* data) {
-    if(idx == 0) {
+    if(head->len == 0 || head->len == idx) {
         ll_append(head, data);
     } else {
         ll_insertBefore(head, idx, data);

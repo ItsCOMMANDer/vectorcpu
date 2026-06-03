@@ -6,10 +6,12 @@
 #include <libgen.h>
 #include <assert.h>
 #include <unistd.h>
+#include <ctype.h>
 
 #include "linkedList.h"
 
 void srcCodeLine_delete(void* data);
+void macros_delete(void* data);
 
 struct srcCodeLine {
     char* str;
@@ -115,15 +117,166 @@ char* stripWhitespace(const char* str, size_t len) {
 (DONE) #endif
 
 How to macro expansions:
-macro name = uninterrupted sequnce of a-z, A-Z, 0-9, or "_"
+macro name = uninterrupted sequnce of a-z, A-Z, 0-9, or "_"  CANT start with digit
+sequence is interrupted by: ' ', '\t', ',', '\"'      also outside quote
 */
+
+#define VALID_MACRO_NAME_CHAR(c) \
+    ((((c) >= '0' && (c) <= '9') || \
+      ((c) >= 'a' && (c) <= 'z') || \
+      ((c) >= 'A' && (c) <= 'Z') || \
+      (c) == '_'))
+
+void macroRepl_del(void* ptr) {free(ptr);}
+
+const char* findMacro(struct ll_head* macros, const char* name) {
+    struct ll_node* cur = macros->start;
+
+    while (cur != NULL) {
+        struct macro* mac = cur->data;
+
+        if (strcmp(mac->macroName, name) == 0)
+            return mac->replacement;
+
+        cur = cur->next;
+    }
+
+    return NULL;
+}
+
+char* expandMacros(const char* input, struct ll_head* macros) {
+    size_t cap = 256;
+    size_t outLen = 0;
+
+    char* out = malloc(cap);
+
+    size_t i = 0;
+
+    int atLineStart = 1;
+    int inDirective = 0;
+    int suppressNextIdentifier = 0;
+
+    while (input[i]) {
+
+        // detect start of preprocessor directive
+        if (atLineStart && input[i] == '#') {
+            inDirective = 1;
+        }
+
+        // valid identifier start
+        if (isalpha((unsigned char)input[i]) ||
+            input[i] == '_') {
+
+            size_t start = i;
+
+            i++;
+
+            // identifier continuation
+            while (isalnum((unsigned char)input[i]) ||
+                   input[i] == '_') {
+                i++;
+            }
+
+            size_t len = i - start;
+
+            char ident[256];
+
+            memcpy(ident, input + start, len);
+            ident[len] = '\0';
+
+            const char* text;
+
+            if (inDirective) {
+
+                // directives where next identifier
+                // must NOT be expanded
+                if (strcmp(ident, "define") == 0 ||
+                    strcmp(ident, "undef") == 0 ||
+                    strcmp(ident, "ifdef") == 0 ||
+                    strcmp(ident, "ifndef") == 0) {
+
+                    suppressNextIdentifier = 1;
+                    text = ident;
+                }
+                else if (suppressNextIdentifier) {
+
+                    suppressNextIdentifier = 0;
+                    text = ident;
+                }
+                else {
+
+                    const char* repl =
+                        findMacro(macros, ident);
+
+                    text = repl ? repl : ident;
+                }
+            }
+            else {
+
+                const char* repl =
+                    findMacro(macros, ident);
+
+                text = repl ? repl : ident;
+            }
+
+            size_t textLen = strlen(text);
+
+            // grow output buffer
+            while (outLen + textLen + 1 > cap) {
+                cap *= 2;
+                out = realloc(out, cap);
+            }
+
+            memcpy(out + outLen, text, textLen);
+            outLen += textLen;
+        }
+        else {
+
+            // ordinary character
+
+            if (outLen + 2 > cap) {
+                cap *= 2;
+                out = realloc(out, cap);
+            }
+
+            out[outLen++] = input[i];
+
+            // newline handling
+            if (input[i] == '\n') {
+                atLineStart = 1;
+                inDirective = 0;
+            }
+            else if (!isspace((unsigned char)input[i])) {
+                atLineStart = 0;
+            }
+
+            i++;
+        }
+    }
+
+    out[outLen] = '\0';
+
+    return out;
+}
 
 void preprocess(struct ll_head* head, struct ll_head* includes, __attribute__((unused)) struct ll_head* macros) {
     for(size_t idx = 0; idx < head->len; idx++) {
         struct ll_node *srcLineNode_tmp = ll_get(head, idx);
         struct srcCodeLine *srcLine = srcLineNode_tmp->data;
+        
+        // handle macro expainsion
+        {
+            char* result = expandMacros(srcLine->str, macros);
+
+            free(srcLine->str);
+            srcLine->str = result;
+            srcLine->str_len = strlen(result);
+        }
+        
         if(srcLine == NULL || srcLine->str_len <= 1 || srcLine->str[0] != '#') continue;
+
         if(srcLine->str_len > 9 && strncmp("#include ", srcLine->str, 9) == 0) {
+
             //    open file
             //    read each line an appendAfter $idx
             //    delete node $idx
@@ -208,7 +361,7 @@ void preprocess(struct ll_head* head, struct ll_head* includes, __attribute__((u
                 struct srcCodeLine* curSrcLine = (struct srcCodeLine*)(cur->data);
                 srcLine->str = strdup(curSrcLine->str);
                 srcLine->str_len = curSrcLine->str_len;
-                srcLine->file = strdup(curSrcLine->file);
+                srcLine->file = strdup(curSrcLine->file); 
                 srcLine->line = curSrcLine->line;
                 ll_insertAs(head, idx, srcLine);
             }
@@ -252,6 +405,24 @@ void preprocess(struct ll_head* head, struct ll_head* includes, __attribute__((u
 
             currentMacro->replacement = strndup(macroReplacementStart, macroReplacementStart_len);
 
+            if(currentMacro->macroName[0] >= '0' && currentMacro->macroName[0] <= '9') {
+                printf(RED"%s:%lu Macro names MUST NOT begin with a numerical digit. Macro name \"%s\" violated one of these rules.\n"RESET, srcLine->file, srcLine->line, currentMacro->macroName);
+                ll_remove(head, idx--);
+                macros_delete(currentMacro);
+                continue;
+            }
+            for(size_t i = 0; i < strlen(currentMacro->macroName); i++) {
+                if( (currentMacro->macroName[i] < 'a' || currentMacro->macroName[i] > 'z') &&
+                    (currentMacro->macroName[i] < 'A' || currentMacro->macroName[i] > 'Z') && 
+                    (currentMacro->macroName[i] < '0' || currentMacro->macroName[i] > '9') &&
+                    currentMacro->macroName[i] != '_') {
+                    
+                    printf(RED"%s:%lu Macros names MUST ONLY consist of a-z, A-Z, 0-9 and '_'. Macro name \"%s\" violated one of these rules.\n"RESET, srcLine->file, srcLine->line, currentMacro->macroName);
+                    ll_remove(head, idx--);
+                    continue;
+                }
+            }
+
             for(size_t i = 0; i < macros->len; i++) {
                 struct macro* cur = ll_get(macros, i)->data;
                 if(strcmp(cur->macroName, currentMacro->macroName) == 0) {
@@ -273,9 +444,14 @@ void preprocess(struct ll_head* head, struct ll_head* includes, __attribute__((u
                 struct macro* cur = ll_get(macros, i)->data;
                 if(strcmp(cur->macroName, macroName) == 0) {
                     ll_remove(macros, i);
-                    break;
+                    
+                    goto undef_end;
                 }
             }
+
+            printf(RED"%s:%lu Cannot undefine, macro \"%s\" does not exists\n"RESET, srcLine->file, srcLine->line, macroName);
+
+            undef_end:
 
             ll_remove(head, idx--);
 
@@ -300,7 +476,6 @@ void preprocess(struct ll_head* head, struct ll_head* includes, __attribute__((u
                 struct macro* cur = ll_get(macros, i)->data;
                 if(strcmp(cur->macroName, macroName) == 0) {
                     removeCode = false;
-                    printf(GREEN"SET NOT DEL TO TRUE"RESET"\n");
                     break;
                 }
             }
@@ -311,19 +486,15 @@ void preprocess(struct ll_head* head, struct ll_head* includes, __attribute__((u
             size_t retIdx = idx;
 
             while(conditionalPreproStack > 0 || idx < head->len) {
-                printf(RED"Stack depth: %lu"RESET"\n", conditionalPreproStack);
                 struct srcCodeLine* cur = ll_get(head, idx)->data;
-                printf(BLUE"PROCESSING : \"%s\" -> "RESET, cur->str);
 
                 if(strncmp(cur->str, "#ifdef ", 7) == 0 ||
                    strncmp(cur->str, "#ifndef ", 8) == 0) {
                     conditionalPreproStack++;
-                    printf("inced\n");
                 }
 
                 if(strncmp(cur->str, "#endif", 6) == 0) {
                     conditionalPreproStack--;
-                    printf("deced\n");
                     if(conditionalPreproStack == 0) {
                         ll_remove(head, idx);
                         break;
@@ -341,7 +512,6 @@ void preprocess(struct ll_head* head, struct ll_head* includes, __attribute__((u
         }
 
         if(srcLine->str_len > 7 && strncmp("#ifndef ", srcLine->str, 8) == 0) {
-            printf("IFNDEF IN FILE \"%s\" line %lu (idx %lu)\n", srcLine->file, srcLine->line, idx);
             char* macroName = strdup(&srcLine->str[8]);
             
             bool removeCode = false;
@@ -349,12 +519,9 @@ void preprocess(struct ll_head* head, struct ll_head* includes, __attribute__((u
             for(size_t i = 0; i < macros->len; i++) {
                 struct macro* cur = ll_get(macros, i)->data;
                 if(strcmp(cur->macroName, macroName) == 0) {
-                    printf("\"%s\" == \"%s\"\n", cur->macroName, macroName);
                     removeCode = true;
-                    printf(GREEN"SET DEL TO TRUE"RESET"\n");
                     break;
                 }
-                printf("\"%s\" != \"%s\"\n", cur->macroName, macroName);
             }
 
             size_t conditionalPreproStack = 1;
@@ -363,19 +530,15 @@ void preprocess(struct ll_head* head, struct ll_head* includes, __attribute__((u
             size_t retIdx = idx;
 
             while(conditionalPreproStack > 0 || idx < head->len) {
-                printf(RED"Stack depth: %lu"RESET"\n", conditionalPreproStack);
                 struct srcCodeLine* cur = ll_get(head, idx)->data;
-                printf(BLUE"PROCESSING : \"%s\" -> "RESET, cur->str);
 
                 if(strncmp(cur->str, "#ifdef ", 7) == 0 ||
                    strncmp(cur->str, "#ifndef ", 8) == 0) {
                     conditionalPreproStack++;
-                    printf("inced\n");
                 }
 
                 if(strncmp(cur->str, "#endif", 6) == 0) {
                     conditionalPreproStack--;
-                    printf("deced\n");
                     if(conditionalPreproStack == 0) {
                         ll_remove(head, idx);
                         break;
@@ -492,6 +655,7 @@ int main(int __attribute__((unused)) argc, char __attribute__((unused)) **argv) 
 
     preprocess(&srcCode_llhead, &includes_llhead, &macros_llhead);
 
+    printf("------------- CODE -------------\n");
     for(struct ll_node* cur = srcCode_llhead.start; cur != NULL; cur = cur->next) {
         printf("%s\n", ((struct srcCodeLine*)cur->data)->str);
     }

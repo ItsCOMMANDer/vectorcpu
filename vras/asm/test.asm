@@ -5,11 +5,13 @@
 #include    "dir/nestedIncl.asm"
 
 #define PI 3.14159265358979323
-#define PI 2*3.14159265358979323
+#define two2PI 2*3.14159265358979323
 
 #ifdef PI
 #undef PI
 #endif
+
+mov r0, PI
 
 @offset 0x0
 start:

@@ -7,11 +7,15 @@
 #include <assert.h>
 #include <unistd.h>
 #include <ctype.h>
+#include <errno.h>
 
 #include "linkedList.h"
 
 void srcCodeLine_delete(void* data);
 void macros_delete(void* data);
+void tokenStr_delete(void* data);
+void labels_delete(void* data);
+void statement_delete(void* data);
 
 struct srcCodeLine {
     char* str;
@@ -23,6 +27,69 @@ struct srcCodeLine {
 struct macro {
     char* macroName;
     char* replacement;
+};
+
+struct label {
+    char* name;
+    uint16_t addr;
+};
+
+struct tok {
+    char* tok;
+    char* src;
+};
+
+/*
+ * A = addr
+ * S = src
+ * D = dest
+ * P = port id
+ * I = imm8
+ * N = nothing
+ */
+
+enum ins_pattern {
+    PAT_A,
+    PAT_N,
+    PAT_S,
+    PAT_D,
+    PAT_SP,
+    PAT_DP,
+    PAT_DS,
+    PAT_DSS,
+    PAT_DI,
+    PAT_SI,
+    PAT_SDI,
+};
+
+struct instruction {
+    enum ins_pattern pat;
+    uint8_t opcode;
+    uint16_t addr;
+    char* addr_label; // Optional, null if unused
+    uint8_t imm8;
+    uint8_t pid;
+    uint8_t dest;
+    uint8_t src1;
+    uint8_t src2;
+};
+
+enum statementType {
+    STATEMENT_CPUINSTRUCTION,
+    STATEMENT_DIRECTIVE_OFFSET,
+    STATEMENT_DIRECTIVE_ASCIIZ,
+};
+
+struct statement {
+    enum statementType type;
+    union {
+        struct instruction instr;
+        uint16_t offsetAddr;
+        struct {
+            char* buf;
+            size_t size;
+        } asciiz;
+    } data;
 };
 
 char* stripTrailingSlash(char *path) {
@@ -259,7 +326,7 @@ char* expandMacros(const char* input, struct ll_head* macros) {
     return out;
 }
 
-void preprocess(struct ll_head* head, struct ll_head* includes, __attribute__((unused)) struct ll_head* macros) {
+void preprocess(struct ll_head* head, struct ll_head* includes, struct ll_head* macros) {
     for(size_t idx = 0; idx < head->len; idx++) {
         struct ll_node *srcLineNode_tmp = ll_get(head, idx);
         struct srcCodeLine *srcLine = srcLineNode_tmp->data;
@@ -460,11 +527,9 @@ void preprocess(struct ll_head* head, struct ll_head* includes, __attribute__((u
         }
 
 /*
- *
  * Ifdef schenanigens
  * increment stack: ifdef ifndef
  * decrement stack: endif
- *
  */
 
         if(srcLine->str_len > 7 && strncmp("#ifdef ", srcLine->str, 7) == 0) {
@@ -557,6 +622,258 @@ void preprocess(struct ll_head* head, struct ll_head* includes, __attribute__((u
     }
 }
 
+void assemble(struct ll_head* head) {
+
+    // assembler state info
+    uint16_t offset = 0;
+    struct ll_head labels = {
+        .delete = &labels_delete,
+        .len = 0,
+        .start = NULL,
+        .end = NULL,
+    };
+
+    struct ll_head statements = {
+        .delete = &statement_delete,
+        .len = 0,
+        .start = NULL,
+        .end = NULL,
+    };
+
+    for(struct ll_node *cur = head->start; cur != NULL; cur = cur->next) {
+        struct srcCodeLine *src = cur->data;
+
+        if(src->str_len == 0) continue;
+
+        size_t commentCutoff = src->str_len;
+
+        for(size_t i = 0; i < src->str_len - 1; i++) {
+            if(src->str[i] == '/' && src->str[i + 1] == '/') {
+                commentCutoff = i;
+                break;
+            }
+        }
+
+        char* instr = strndup(src->str, commentCutoff);
+        
+
+        bool nonEmpty = false;
+
+        for(size_t i = 0; i < strlen(instr); i++) {
+            if(instr[i] != ' ' && instr[i] != ',' && instr[i] != '\t') {
+                nonEmpty = true;
+                break;
+            }
+        }
+
+        if(!nonEmpty) {
+            free(instr);
+            continue;
+        }
+
+        // 3 SCENARIOS:
+        // 1. label
+        // 2. assembler directives (@offset -esque things)
+        // 3. actual instruction
+
+        // rules for thee
+        // 1. last non-whitespace is ':'
+        // 2. first non-whitespace is '@'
+        // 3. !1. && !2.
+
+        struct ll_head tokens = {
+            .delete = &tokenStr_delete,
+            .len = 0,
+            .start = NULL,
+            .end = NULL,
+        };
+
+        char* tok = strtok(instr, " \t,");
+
+        struct tok *token = calloc(1, sizeof(struct tok));
+        token->tok = strdup(tok);
+        token->src = strndup(src->str, commentCutoff);
+
+        ll_append(&tokens, token);
+
+        while(tok != NULL) {
+            tok = strtok(NULL, " \t,");
+            if(tok == NULL) break;
+            
+            struct tok *token = calloc(1, sizeof(struct tok));
+            token->tok = strdup(tok);
+            token->src = strndup(src->str, commentCutoff);
+            ll_append(&tokens, token);
+        }
+
+        printf("Comparing \"%s\"\n", ((struct tok*)(ll_get(&tokens, 0))->data)->tok);
+
+        if(((struct tok*)(ll_get(&tokens, 0))->data)->tok[0] == '@') {
+            if(strcmp(((struct tok*)(ll_get(&tokens, 0))->data)->tok, "@offset") == 0) {
+                char *end = 0;
+                char *str = ((struct tok*)(ll_get(&tokens, 1)->data))->tok;
+                long rawVal = strtol(str, &end, 0);
+
+                if(str == end) {
+                    printf("No number.\n");
+                } else if(errno == ERANGE || (rawVal & 0xfff) != rawVal) {
+                    printf("Number out of range.\n");
+                } else if(*end != '\0') {
+                    printf("Trailing junk: \"%s\"\n", end);
+                } else {
+                    struct statement *stmnt = calloc(1, sizeof(struct statement));
+                    stmnt->type = STATEMENT_DIRECTIVE_OFFSET;
+                    stmnt->data.offsetAddr = rawVal;
+
+                    ll_append(&statements, stmnt);
+                }
+            } else if(strcmp(((struct tok*)(ll_get(&tokens, 0))->data)->tok, "@asciiz") == 0) {
+                char* asciiz = ((struct tok*)(ll_get(&tokens, 1))->data)->src;
+
+                asciiz += strlen("@asciiz");
+
+                while(isspace((unsigned char)*asciiz)) asciiz++;
+
+                asciiz = strdup(asciiz);
+                char *oldAsciiz = asciiz;
+
+                if(asciiz[0] != '"') {
+                    printf("Did not find qouted string in @asciiz directive.\n");
+                    free(oldAsciiz);
+                    continue;
+                }
+
+                asciiz++;
+
+                char *quotedBuf = calloc(strlen(asciiz) + 1, 1);
+
+                size_t out = 0;
+
+                bool borked = false;
+
+                while(*asciiz && *asciiz != '"') {
+                    char c = *asciiz++;
+
+                    if(c == '\\') {
+                        if(*asciiz == '\0') {
+                            free(quotedBuf);
+                            free(oldAsciiz);
+                            printf("Invalid qouted string\n");
+                            borked = true;
+                            break;
+                        }
+
+                        c = *asciiz++;
+
+                        switch(c) {
+                            case 'n': c = '\n'; break;
+                            case 'r': c = '\r'; break;
+                            case 't': c = '\t'; break;
+                            case '\\': c = '\\'; break;
+                            case '"': c = '"'; break;
+
+                            case 'x': {
+                                int value = 0;
+                                for(int i = 0; i < 2; i++) {
+                                    char h = *asciiz++;
+
+                                    if(!isxdigit((unsigned char)h)) {
+                                        free(quotedBuf);
+                                        free(oldAsciiz);
+                                        printf("invalid hex code");
+                                        borked = true;
+                                        break;
+                                    }
+
+                                    value <<= 4;
+
+                                    if(h >= '0' && h <= '9') value |= h - '0';
+                                    else if(h >= 'a' && h <= 'f') value |= h - 'a' + 10;
+                                    else value |= h - 'A' + 10;
+                                }
+
+                                c = (char)value;
+                                break;
+                            }
+
+                            default: break;
+                        }
+                    }
+
+                    quotedBuf[out++] = c;
+                }
+
+                if(borked) {
+                    continue;
+                }
+
+                if(*asciiz != '"') {
+                    free(quotedBuf);
+                    free(oldAsciiz);
+                    printf("Exit qoute missing\n");
+                    continue;
+                }
+
+                struct statement *stmnt = calloc(sizeof(struct statement), 1);
+                stmnt->type = STATEMENT_DIRECTIVE_ASCIIZ;
+                stmnt->data.asciiz.buf = quotedBuf;
+                stmnt->data.asciiz.size = out + 1;
+
+                ll_append(&statements, stmnt);
+
+                free(oldAsciiz);
+            } else {
+                // TODO: better error
+                printf("Invalid directive\n");
+            }
+        } else if(((char*)(ll_get(&tokens, 0)->data))[strlen(((char*)(ll_get(&tokens, 0)->data))) - 1] == ':') {
+            printf("Found label \"%s\"\n", (char*)(ll_get(&tokens, 0)->data));
+            
+            struct label *lab = calloc(1, sizeof(struct label));
+            lab->addr = offset;
+            lab->name = strdup((char*)(ll_get(&tokens, 0)->data));
+            ll_append(&labels, lab);
+            
+            if(tokens.len > 1) {
+                // Warning
+                printf("Found Garbage after Label declaration.\n");
+            }
+        } else {
+            // parse arm instruction
+            // 1. check if its real
+            // 2. check pattern
+            // 3. parse args
+            // 4. construct stmnt
+        }
+
+        ll_delete(&tokens);
+
+        free(instr);
+    }
+
+
+    for(size_t i = 0; i < statements.len; i++) {
+        struct statement *stmnt = ll_get(&statements, i)->data;
+
+        switch(stmnt->type) {
+            case STATEMENT_DIRECTIVE_OFFSET: {
+                printf("Offset thingy: %i\n", stmnt->data.offsetAddr);
+                break;
+            }
+            case STATEMENT_DIRECTIVE_ASCIIZ: {
+                printf("ASCIIZ str: \"%s\"\n", stmnt->data.asciiz.buf);
+                break;
+            }
+            case STATEMENT_CPUINSTRUCTION: {
+                printf("Cpu instruction\n");
+                break;
+            }
+        }
+    }
+
+    ll_delete(&statements);
+}
+
 void srcCodeLine_delete(void* data) {
     struct srcCodeLine* line = data;
     free(line->str);
@@ -576,6 +893,33 @@ void macros_delete(void* data) {
     free(macros);
 }
 
+void tokenStr_delete(void* data) {
+    struct tok* token = data;
+    free(token->tok);
+    free(token->src);
+    free(token);
+}
+
+void labels_delete(void* data) {
+    struct label *lab = data;
+    free(lab->name);
+    free(data);
+}
+
+void statement_delete(void* data) {
+    struct statement* stmnt = data;
+
+    if(stmnt->type == STATEMENT_DIRECTIVE_ASCIIZ) {
+        free(stmnt->data.asciiz.buf);
+    }
+
+    if(stmnt->type == STATEMENT_CPUINSTRUCTION) {
+        if(stmnt->data.instr.addr_label != NULL) free(stmnt->data.instr.addr_label);
+    }
+
+    free(stmnt);
+}
+
 int main(int __attribute__((unused)) argc, char __attribute__((unused)) **argv) {
     printf("Vectorcpu Raw ASsembler v0.0.0\n");
     
@@ -586,7 +930,7 @@ int main(int __attribute__((unused)) argc, char __attribute__((unused)) **argv) 
         .delete = includes_delete,
     };
 
-    const char inputFile_name[] = "./asm/test.asm";
+    const char inputFile_name[] = "./asm/fib.asm";
 
     FILE* inputFile_fd = fopen(inputFile_name, "r");
     if(inputFile_fd == NULL) {
@@ -655,6 +999,9 @@ int main(int __attribute__((unused)) argc, char __attribute__((unused)) **argv) 
 
     preprocess(&srcCode_llhead, &includes_llhead, &macros_llhead);
 
+    assemble(&srcCode_llhead);
+
+    /*
     printf("------------- CODE -------------\n");
     for(struct ll_node* cur = srcCode_llhead.start; cur != NULL; cur = cur->next) {
         printf("%s\n", ((struct srcCodeLine*)cur->data)->str);
@@ -664,6 +1011,7 @@ int main(int __attribute__((unused)) argc, char __attribute__((unused)) **argv) 
     for(struct ll_node* cur = macros_llhead.start; cur != NULL; cur = cur->next) {
         printf("\"%s\" -> \"%s\"\n", ((struct macro*)cur->data)->macroName, ((struct macro*)cur->data)->replacement);
     }
+    */
 
     ll_delete(&srcCode_llhead);
     ll_delete(&includes_llhead);

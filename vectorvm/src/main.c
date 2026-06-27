@@ -64,7 +64,7 @@ uint16_t fib[] = {
 /* 00 */ MKI_LDI(REG_R1, 0xff),
 /* 02 */ MKI_WRSS(REG_R1),
 /* 04 */ MKI_WRSP(REG_R1),
-/* 06 */ MKI_LDI(REG_R1, 20),
+/* 06 */ MKI_LDI(REG_R1, 13),
 /* 08 */ MKI_CALL(12),
 /* 10 */ MKI_HALT(),
 /* 12 fib: */ MKI_ADDI(REG_R2, REG_R1, 0),

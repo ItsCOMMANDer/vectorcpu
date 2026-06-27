@@ -36,7 +36,7 @@ void vcore_dump(struct vcpu_core* cpu);
 #define MKC_DST(x) ((x & 0b111) << 8)
 #define MKC_SRC1(x) ((x & 0b111) << 5)
 #define MKC_SRC2(x) ((x & 0b111) << 2)
-#define MKC_SRC1ALT1(x) ((x >> 0b111) << 8)
+#define MKC_SRC1ALT1(x) ((x & 0b111) << 8)
 #define MKC_SRC1ALT2(x) ((x & 0b111) << 11)
 
 #define MKI_JMP(addr)  (0b0000000000000000 | MKC_ADDR(addr))
@@ -83,7 +83,7 @@ void vcore_dump(struct vcpu_core* cpu);
 #define MKI_LDI(dst, imm8)		(0b1010000000000000 | MKC_DST(dst) | MKC_IMM8(imm8))
 #define MKI_SRLDR(dst, imm8)	(0b1010100000000000 | MKC_DST(dst) | MKC_IMM8(imm8))
 
-#define MKI_SRSTR(dst, imm8)		(0b1011000000000000 | MKC_DST(dst) | MKC_IMM8(imm8))
+#define MKI_SRSTR(src, imm8)		(0b1011000000000000 | MKC_SRC1ALT1(src) | MKC_IMM8(imm8))
 #define MKI_ADDI(dst, src, imm8)	(0b1100000000000000 | MKC_DST(dst) | MKC_SRC1ALT2(src) | MKC_IMM8(imm8))
 
 #define REG_R0 0

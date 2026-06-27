@@ -48,6 +48,27 @@ struct tok {
  * N = nothing
  */
 
+#define MKC_ADDR(x) (x & 0b111111111111)
+#define MKC_PID(x) ((x & 0b111) << 2)
+#define MKC_IMM8(x) (x & 0xff)
+#define MKC_DST(x) ((x & 0b111) << 8)
+#define MKC_SRC1(x) ((x & 0b111) << 5)
+#define MKC_SRC2(x) ((x & 0b111) << 2)
+#define MKC_SRC1ALT1(x) ((x && 0b111) << 8)
+#define MKC_SRC1ALT2(x) ((x & 0b111) << 11)
+
+#define MKI_PAT_A(opcode, addr) (opcode | MKC_ADDR(addr))
+#define MKI_PAT_N(opcode) (opcode)
+#define MKI_PAT_S(opcode, src) (opcode | MKC_SRC1(src))
+#define MKI_PAT_D(opcode, dst) (opcode | MKC_DST(dst))
+#define MKI_PAT_SP(opcode, src, pid) (opcode | MKC_SRC1(src))
+#define MKI_PAT_DP(opcode, dst, pid) (opcode | MKC_DST(dst))
+#define MKI_PAT_DS(opcode, dst, src) (opcode | MKC_SRC1(src) | MKC_DST(dst))
+#define MKI_PAT_DSS(opcode, dst, src1, src2) (opcode | MKC_DST(dst) | MKC_SRC1(src1) | MKC_SRC2(src2))
+#define MKI_PAT_DI(opcode, dst, imm8) (opcode | MKC_DST(dst) | MKC_IMM8(imm8))
+#define MKI_PAT_SI(opcode, src, imm8) (opcode | MKC_SRC1ALT1(src) | MKC_IMM8(imm8))
+#define MKI_PAT_SDI(opcode, src, dst, imm8) (opcode | MKC_DST(dst) | MKC_SRC1ALT2(src) | MKC_IMM8(imm8))
+
 enum ins_pattern {
     PAT_A,
     PAT_N,
@@ -58,13 +79,95 @@ enum ins_pattern {
     PAT_DS,
     PAT_DSS,
     PAT_DI,
-    PAT_SI,
+    PAT_SI, 
     PAT_SDI,
 };
 
+uint16_t parseAddr(char* tok, bool try) {
+    char* end = NULL;
+    errno = 0;
+    long rawVal = strtol(tok, &end, 0);
+
+    if(tok == end) {
+        if(try) printf("No Number found in \"%s\".\n", tok);
+        return 0xffff;
+    } else if(errno == ERANGE || rawVal > 0xfff || rawVal < 0) {
+        if(try) printf("Imm8 (\"%s\") out of range (must be 12 bit unsigned integer)\n", tok);
+        return 0xffff;
+    } else if(*end != '\0') {
+        if(try) printf("Trailing junk (in \"%s\")\n", tok);
+        return 0xffff;
+    } else {
+        return (uint16_t)rawVal;
+    }
+}
+
+// parse label is literally just parseLable(char* tok) {return tok;}
+char *regList[] = {
+    "r0",
+    "r1",
+    "r2",
+    "r3",
+    "r4",
+    "r5",
+    "r6",
+    "r7",
+};
+
+uint8_t parseReg(char* tok) {
+    for(uint8_t i = 0; i < 8; i++) {
+        if(strncmp(regList[i], tok, 3) == 0) return i;
+    }
+    printf("Invalid reg \"%s\"\n", tok);
+    return 0xff;
+}
+
+uint8_t parsePort(char* tok) {
+    char* end = NULL;
+    errno = 0;
+    long rawVal = strtol(tok, &end, 0);
+
+    if(tok == end) {
+        printf("No Number found in \"%s\".\n", tok);
+        return 0xff;
+    } else if(errno == ERANGE || rawVal > 7 || rawVal < 0) {
+        printf("Imm8 (\"%s\") out of range (must be between 0 and 7)\n", tok);
+        return 0xff;
+    } else if(*end != '\0') {
+        printf("Trailing junk (in \"%s\")\n", tok);
+        return 0xff;
+    } else {
+        return (uint8_t)rawVal;
+    }
+}
+
+uint16_t parseImm8(char* tok) {
+    char* end = NULL;
+
+    errno = 0;
+    long rawVal = strtol(tok, &end, 0);
+
+    if(tok == end) {
+        printf("No Number found in \"%s\".\n", tok);
+        return 0xffff;
+    } else if(errno == ERANGE || rawVal > 255 || rawVal < -127) {
+        printf("Imm8 (\"%s\") out of range (must be between -127 and 255)\n", tok);
+        return 0xffff;
+    } else if(*end != '\0') {
+        printf("Trailing junk (in \"%s\")\n", tok);
+        return 0xffff;
+    } else {
+        if(rawVal < 0) {
+            return (uint16_t)(((uint8_t)(int8_t)rawVal) | 0x00 << 8);
+        } else {
+            return (uint16_t)(((uint8_t)rawVal) | 0x00 << 8);
+        }
+    }
+}
+
 struct instruction {
     enum ins_pattern pat;
-    uint8_t opcode;
+    uint16_t opcode;
     uint16_t addr;
     char* addr_label; // Optional, null if unused
     uint8_t imm8;
@@ -622,7 +725,113 @@ void preprocess(struct ll_head* head, struct ll_head* includes, struct ll_head* 
     }
 }
 
-void assemble(struct ll_head* head) {
+uint16_t resolveLabel(struct ll_head *labels, char* labelName) {
+    for(size_t i = 0; i < labels->len; i++) {
+        struct label* lab = ll_get(labels, i)->data;
+        if(strcmp(lab->name, labelName) == 0) return lab->addr;
+    }
+    return 0xffff;
+}
+
+#define BYTE_TO_BINARY_PATTERN "%c%c%c%c%c%c%c%c"
+#define BYTE_TO_BINARY(byte)  \
+  ((byte) & 0x80 ? '1' : '0'), \
+  ((byte) & 0x40 ? '1' : '0'), \
+  ((byte) & 0x20 ? '1' : '0'), \
+  ((byte) & 0x10 ? '1' : '0'), \
+  ((byte) & 0x08 ? '1' : '0'), \
+  ((byte) & 0x04 ? '1' : '0'), \
+  ((byte) & 0x02 ? '1' : '0'), \
+  ((byte) & 0x01 ? '1' : '0') 
+
+uint16_t asmCpuInstr(struct instruction ins, struct ll_head *labels) {
+    //printf("opcode used: %u\n", ins.opcode);
+    switch(ins.pat) {
+        case PAT_A: {
+            if(ins.addr_label == NULL) return MKI_PAT_A(ins.opcode, ins.addr);
+            else {
+                uint16_t addr = resolveLabel(labels, ins.addr_label);
+                if(addr == 0xffff) {
+                    printf("Can't find label \"%s\", defaulting to 0\n", ins.addr_label);
+                    return MKI_PAT_A(ins.opcode, 0);
+                }
+                return MKI_PAT_A(ins.opcode, addr);
+            }
+        }
+        case PAT_N: return MKI_PAT_N(ins.opcode);
+        case PAT_S: return MKI_PAT_S(ins.opcode, ins.src1);
+        case PAT_D: {
+            //printf("THINGY %u %u\n", ins.opcode, ins.dest);
+            return MKI_PAT_D(ins.opcode, ins.dest);
+        }
+        case PAT_SP: return MKI_PAT_SP(ins.opcode, ins.src1, ins.pid);
+        case PAT_DP: return MKI_PAT_DP(ins.opcode, ins.dest, ins.pid);
+        case PAT_DS: return MKI_PAT_DS(ins.opcode, ins.dest, ins.src1);
+        case PAT_DSS: return MKI_PAT_DSS(ins.opcode, ins.dest, ins.src1, ins.src2);
+        case PAT_DI: return MKI_PAT_DI(ins.opcode, ins.dest, ins.imm8);
+        case PAT_SI: return MKI_PAT_SI(ins.opcode, ins.src1, ins.imm8);
+        case PAT_SDI: return MKI_PAT_SDI(ins.opcode, ins.src1, ins.dest, ins.imm8);
+    }
+    printf("Invalid instruction, defailting to halt");
+    return 0b1001000000000111; // asm:halt
+}
+
+struct {
+    char mnemonic[16];
+    uint16_t opcode;
+    enum ins_pattern pat;
+} instructionFormats[] = {
+    {.mnemonic = "jmp", .opcode = 0b0000000000000000, .pat = PAT_A},
+    {.mnemonic = "call", .opcode = 0b0001000000000000, .pat = PAT_A},
+    {.mnemonic = "bltu", .opcode = 0b0010000000000000, .pat = PAT_A},
+    {.mnemonic = "bleu", .opcode = 0b0011000000000000, .pat = PAT_A},
+    {.mnemonic = "blts", .opcode = 0b0100000000000000, .pat = PAT_A},
+    {.mnemonic = "bles", .opcode = 0b0101000000000000, .pat = PAT_A},
+    {.mnemonic = "beq", .opcode = 0b0110000000000000, .pat = PAT_A},
+    {.mnemonic = "bne", .opcode = 0b0111000000000000, .pat = PAT_A},
+
+    {.mnemonic = "nop",  .opcode = 0b1001000000000011, .pat = PAT_N},
+    {.mnemonic = "halt", .opcode = 0b1001000000000111, .pat = PAT_N},
+    {.mnemonic = "ret",  .opcode = 0b1001000000001011, .pat = PAT_N},
+    {.mnemonic = "enzr", .opcode = 0b1001000000001111, .pat = PAT_N},
+    {.mnemonic = "dszr", .opcode = 0b1001000000010011, .pat = PAT_N},
+    
+    {.mnemonic = "push", .opcode = 0b1001000000000000, .pat = PAT_S},
+    {.mnemonic = "wrss", .opcode = 0b1001000000000100, .pat = PAT_S},
+    {.mnemonic = "wrds", .opcode = 0b1001000000001000, .pat = PAT_S},
+    {.mnemonic = "wrsp", .opcode = 0b1001000000001100, .pat = PAT_S},
+    
+    {.mnemonic = "pop",  .opcode = 0b1001000000000001, .pat = PAT_D},
+    {.mnemonic = "rdss", .opcode = 0b1001000000000101, .pat = PAT_D},
+    {.mnemonic = "rdds", .opcode = 0b1001000000001001, .pat = PAT_D},
+    {.mnemonic = "rdsp", .opcode = 0b1001000000001101, .pat = PAT_D},
+    
+    {.mnemonic = "out", .opcode = 0b1001100000000000, .pat = PAT_SP},
+    
+    {.mnemonic = "in",  .opcode = 0b1001100000000001, .pat = PAT_DP},
+    
+    {.mnemonic = "mov",  .opcode = 0b1001000000000010, .pat = PAT_DS},
+    {.mnemonic = "not",  .opcode = 0b1001000000000110, .pat = PAT_DS},
+    {.mnemonic = "ldr",  .opcode = 0b1001000000001010, .pat = PAT_DS},
+    {.mnemonic = "str",  .opcode = 0b1001000000001110, .pat = PAT_DS},
+    
+    {.mnemonic = "add",  .opcode = 0b1000000000000000, .pat = PAT_DSS},
+    {.mnemonic = "sub",  .opcode = 0b1000000000000001, .pat = PAT_DSS},
+    {.mnemonic = "adc",  .opcode = 0b1000000000000010, .pat = PAT_DSS},
+    {.mnemonic = "sbc",  .opcode = 0b1000000000000011, .pat = PAT_DSS},
+    {.mnemonic = "and",  .opcode = 0b1000100000000000, .pat = PAT_DSS},
+    {.mnemonic = "or",   .opcode = 0b1000100000000001, .pat = PAT_DSS},
+    {.mnemonic = "xor",  .opcode = 0b1000100000000010, .pat = PAT_DSS},
+
+    {.mnemonic = "ldi",    .opcode = 0b1010000000000000, .pat = PAT_DI},
+    {.mnemonic = "srldr",  .opcode = 0b1010100000000000, .pat = PAT_DI},
+    
+    {.mnemonic = "srstr",  .opcode = 0b1011000000000000, .pat = PAT_SI},
+    
+    {.mnemonic = "addi",  .opcode = 0b1100000000000000, .pat = PAT_SDI},
+};
+
+uint8_t* assemble(struct ll_head* head, size_t *bufSize) {
 
     // assembler state info
     uint16_t offset = 0;
@@ -706,12 +915,13 @@ void assemble(struct ll_head* head) {
             ll_append(&tokens, token);
         }
 
-        printf("Comparing \"%s\"\n", ((struct tok*)(ll_get(&tokens, 0))->data)->tok);
+        //printf("Comparing \"%s\"\n", ((struct tok*)(ll_get(&tokens, 0))->data)->tok);
 
         if(((struct tok*)(ll_get(&tokens, 0))->data)->tok[0] == '@') {
             if(strcmp(((struct tok*)(ll_get(&tokens, 0))->data)->tok, "@offset") == 0) {
-                char *end = 0;
+                char *end = NULL;
                 char *str = ((struct tok*)(ll_get(&tokens, 1)->data))->tok;
+                errno = 0;
                 long rawVal = strtol(str, &end, 0);
 
                 if(str == end) {
@@ -721,11 +931,13 @@ void assemble(struct ll_head* head) {
                 } else if(*end != '\0') {
                     printf("Trailing junk: \"%s\"\n", end);
                 } else {
-                    struct statement *stmnt = calloc(1, sizeof(struct statement));
-                    stmnt->type = STATEMENT_DIRECTIVE_OFFSET;
-                    stmnt->data.offsetAddr = rawVal;
+                    //struct statement *stmnt = calloc(1, sizeof(struct statement));
+                    //stmnt->type = STATEMENT_DIRECTIVE_OFFSET;
+                    //stmnt->data.offsetAddr = rawVal;
 
-                    ll_append(&statements, stmnt);
+                    offset = rawVal;
+
+                    //ll_append(&statements, stmnt);
                 }
             } else if(strcmp(((struct tok*)(ll_get(&tokens, 0))->data)->tok, "@asciiz") == 0) {
                 char* asciiz = ((struct tok*)(ll_get(&tokens, 1))->data)->src;
@@ -740,6 +952,9 @@ void assemble(struct ll_head* head) {
                 if(asciiz[0] != '"') {
                     printf("Did not find qouted string in @asciiz directive.\n");
                     free(oldAsciiz);
+
+                    ll_delete(&tokens);
+                    free(instr);
                     continue;
                 }
 
@@ -804,6 +1019,8 @@ void assemble(struct ll_head* head) {
                 }
 
                 if(borked) {
+                    ll_delete(&tokens);
+                    free(instr);
                     continue;
                 }
 
@@ -811,6 +1028,9 @@ void assemble(struct ll_head* head) {
                     free(quotedBuf);
                     free(oldAsciiz);
                     printf("Exit qoute missing\n");
+
+                    ll_delete(&tokens);
+                    free(instr);
                     continue;
                 }
 
@@ -819,6 +1039,8 @@ void assemble(struct ll_head* head) {
                 stmnt->data.asciiz.buf = quotedBuf;
                 stmnt->data.asciiz.size = out + 1;
 
+                offset += out + 1;
+
                 ll_append(&statements, stmnt);
 
                 free(oldAsciiz);
@@ -826,12 +1048,12 @@ void assemble(struct ll_head* head) {
                 // TODO: better error
                 printf("Invalid directive\n");
             }
-        } else if(((char*)(ll_get(&tokens, 0)->data))[strlen(((char*)(ll_get(&tokens, 0)->data))) - 1] == ':') {
-            printf("Found label \"%s\"\n", (char*)(ll_get(&tokens, 0)->data));
+        } else if(((struct tok*)(ll_get(&tokens, 0)->data))->tok[strlen(((struct tok*)(ll_get(&tokens, 0)->data))->tok) - 1] == ':') {
+            //printf("Found label \"%s\"\n", (char*)(ll_get(&tokens, 0)->data));
             
             struct label *lab = calloc(1, sizeof(struct label));
             lab->addr = offset;
-            lab->name = strdup((char*)(ll_get(&tokens, 0)->data));
+            lab->name = strndup(((struct tok*)(ll_get(&tokens, 0)->data))->tok, strlen(((struct tok*)(ll_get(&tokens, 0)->data))->tok) - 1);
             ll_append(&labels, lab);
             
             if(tokens.len > 1) {
@@ -839,39 +1061,425 @@ void assemble(struct ll_head* head) {
                 printf("Found Garbage after Label declaration.\n");
             }
         } else {
-            // parse arm instruction
+            // parse asm instruction
             // 1. check if its real
             // 2. check pattern
             // 3. parse args
             // 4. construct stmnt
+            int instrID = -1;
+            for(size_t i = 0; i < sizeof(instructionFormats) / sizeof(instructionFormats[0]); i++) {
+                if(strncmp(((struct tok*)(ll_get(&tokens, 0)->data))->tok, instructionFormats[i].mnemonic, 15) == 0) {
+                    //printf("INSTR IS \"%s\"\n", instructionFormats[i].mnemonic);
+                    instrID = i;
+                    break;
+                }
+            }
+
+            if(instrID == -1) {
+                printf("Unknown instruction \"%s\"\n", ((struct tok*)(ll_get(&tokens, 0)->data))->tok);
+                
+                ll_delete(&tokens);
+                free(instr);
+                continue;
+            }
+
+            struct statement *stmnt = calloc(sizeof(struct statement), 1);
+            stmnt->type = STATEMENT_CPUINSTRUCTION;
+            stmnt->data.instr.opcode = instructionFormats[instrID].opcode;
+
+            switch(instructionFormats[instrID].pat) {
+                case PAT_A: {
+                    if(tokens.len > 2) {
+                        printf("Too many tokens?\n");
+                    } else if(tokens.len < 2) {
+                        printf("Too little args for this (\"%s\").\n", ((struct tok*)ll_get(&tokens, 0)->data)->tok);
+                        free(stmnt);
+                        goto err_ne_tok;
+                    }
+
+                    stmnt->data.instr.pat = PAT_A;
+
+                    char* addrStr = ((struct tok*)(ll_get(&tokens, 1)->data))->tok;
+
+                    
+                    uint16_t addr = parseAddr(addrStr, false);
+                    if(addr == 0xffff) {
+                        bool borked = false;
+                        for(size_t i = 0; i < strlen(addrStr); i++) {
+                            if(!VALID_MACRO_NAME_CHAR(addrStr[i])) {
+                                borked = true;
+                                break;
+                            }
+                        }
+                        if(borked) {
+                            printf("Invalid addr\n");
+                            free(stmnt);
+                            goto err_ne_tok;
+                        } else {
+                            stmnt->data.instr.addr_label = strdup(addrStr);
+                        }
+
+                    } else stmnt->data.instr.addr = addr;
+                    ll_append(&statements, stmnt);
+                    break;
+                }
+                case PAT_N: {
+                    if(tokens.len > 2) {
+                        printf("This instr doesnt require args??\n");
+                    } else if(tokens.len < 1) {
+                        printf("Too little args for this (\"%s\").\n", ((struct tok*)ll_get(&tokens, 0)->data)->tok);
+                        free(stmnt);
+                        goto err_ne_tok;
+                    }
+                    stmnt->data.instr.pat = PAT_N;
+                    stmnt->data.instr.opcode = instructionFormats[instrID].opcode;
+                    ll_append(&statements, stmnt);
+                    break;
+                }
+                case PAT_S: {
+                    if(tokens.len > 2) {
+                        printf("Too many tokens?\n");
+                    } else if(tokens.len < 2) {
+                        printf("Too little args for this (\"%s\").\n", ((struct tok*)ll_get(&tokens, 0)->data)->tok);
+                        free(stmnt);
+                        goto err_ne_tok;
+                    }
+
+                    uint8_t srcReg = parseReg(((struct tok*)(ll_get(&tokens, 1)->data))->tok);
+                    if(srcReg == 0xff) {
+                        printf("Invalid register source identifier \"%s\"\n", ((struct tok*)(ll_get(&tokens, 1)->data))->tok);
+                        free(stmnt);
+                        goto err_ne_tok;
+                    }
+
+                    stmnt->data.instr.pat = PAT_S;
+                    stmnt->data.instr.src1 = srcReg;
+                    ll_append(&statements, stmnt);
+                    break;
+                }
+                case PAT_D: {
+                    if(tokens.len > 2) {
+                        printf("Too many tokens?\n");
+                    } else if(tokens.len < 2) {
+                        printf("Too little args for this (\"%s\").\n", ((struct tok*)ll_get(&tokens, 0)->data)->tok);
+                        free(stmnt);
+                        goto err_ne_tok;
+                    }
+
+                    uint8_t dstReg = parseReg(((struct tok*)(ll_get(&tokens, 1)->data))->tok);
+                    if(dstReg == 0xff) {
+                        printf("Invalid register destination identifier \"%s\"\n", ((struct tok*)(ll_get(&tokens, 1)->data))->tok);
+                        free(stmnt);
+                        goto err_ne_tok;
+                    }
+
+                    stmnt->data.instr.pat = PAT_D;
+                    stmnt->data.instr.dest = dstReg;
+                    ll_append(&statements, stmnt);
+                    break;
+                }
+                case PAT_SP: {
+                    if(tokens.len > 3) {
+                        printf("Too many tokens?\n");
+                    } else if(tokens.len < 3) {
+                        printf("Too little args for this (\"%s\").\n", ((struct tok*)ll_get(&tokens, 0)->data)->tok);
+                        free(stmnt);
+                        goto err_ne_tok;
+                    }
+
+                    uint8_t srcReg = parseReg(((struct tok*)(ll_get(&tokens, 1)->data))->tok);
+                    uint8_t port = parsePort(((struct tok*)(ll_get(&tokens, 2)->data))->tok);
+                    if(srcReg == 0xff) {
+                        printf("Invalid register source identifier \"%s\"\n", ((struct tok*)(ll_get(&tokens, 1)->data))->tok);
+                        free(stmnt);
+                        goto err_ne_tok;
+                    }
+                    if(port == 0xff) {
+                        printf("Invalid port \"%s\"\n", ((struct tok*)(ll_get(&tokens, 2)->data))->tok);
+                        free(stmnt);
+                        goto err_ne_tok;
+                    }
+
+                    stmnt->data.instr.pat = PAT_SP;
+                    stmnt->data.instr.src1 = srcReg;
+                    stmnt->data.instr.pid = port;
+
+                    ll_append(&statements, stmnt);
+                    break;
+                }
+                case PAT_DP: {
+                    if(tokens.len > 3) {
+                        printf("Too many tokens?\n");
+                    } else if(tokens.len < 3) {
+                        printf("Too little args for this (\"%s\").\n", ((struct tok*)ll_get(&tokens, 0)->data)->tok);
+                        free(stmnt);
+                        goto err_ne_tok;
+                    }
+
+                    uint8_t dstReg = parseReg(((struct tok*)(ll_get(&tokens, 1)->data))->tok);
+                    uint8_t port = parsePort(((struct tok*)(ll_get(&tokens, 2)->data))->tok);
+                    if(dstReg == 0xff) {
+                        printf("Invalid register destination identifier \"%s\"\n", ((struct tok*)(ll_get(&tokens, 1)->data))->tok);
+                        free(stmnt);
+                        goto err_ne_tok;
+                    }
+                    if(port == 0xff) {
+                        printf("Invalid port \"%s\"\n", ((struct tok*)(ll_get(&tokens, 2)->data))->tok);
+                        free(stmnt);
+                        goto err_ne_tok;
+                    }
+
+                    stmnt->data.instr.pat = PAT_DP;
+                    stmnt->data.instr.dest = dstReg;
+                    stmnt->data.instr.pid = port;
+
+                    ll_append(&statements, stmnt);
+                    break;
+                }
+                case PAT_DS: {
+                    if(tokens.len > 3) {
+                        printf("Too many tokens?\n");
+                    } else if(tokens.len < 3) {
+                        printf("Too little args for this (\"%s\").\n", ((struct tok*)ll_get(&tokens, 0)->data)->tok);
+                        free(stmnt);
+                        goto err_ne_tok;
+                    }
+
+                    uint8_t dstReg = parseReg(((struct tok*)(ll_get(&tokens, 1)->data))->tok);
+                    uint8_t srcReg = parseReg(((struct tok*)(ll_get(&tokens, 2)->data))->tok);
+
+                    if(dstReg == 0xff) {
+                        printf("Invalid register destination identifier \"%s\"\n", ((struct tok*)(ll_get(&tokens, 1)->data))->tok);
+                        free(stmnt);
+                        goto err_ne_tok;
+                    }
+
+                    if(srcReg == 0xff) {
+                        printf("Invalid register source identifier \"%s\"\n", ((struct tok*)(ll_get(&tokens, 2)->data))->tok);
+                        free(stmnt);
+                        goto err_ne_tok;
+                    }
+
+                    stmnt->data.instr.pat = PAT_DS;
+                    stmnt->data.instr.dest = dstReg;
+                    stmnt->data.instr.src1 = srcReg;
+
+                    ll_append(&statements, stmnt);
+                    break;
+                }
+                case PAT_DSS: {
+                    if(tokens.len > 4) {
+                        printf("Too many tokens?\n");
+                    } else if(tokens.len < 4) {
+                        printf("Too little args for this (\"%s\").\n", ((struct tok*)ll_get(&tokens, 0)->data)->tok);
+                        free(stmnt);
+                        goto err_ne_tok;
+                    }
+
+                    uint8_t dstReg = parseReg(((struct tok*)(ll_get(&tokens, 1)->data))->tok);
+                    uint8_t src1Reg = parseReg(((struct tok*)(ll_get(&tokens, 2)->data))->tok);
+                    uint8_t src2Reg = parseReg(((struct tok*)(ll_get(&tokens, 3)->data))->tok);
+
+                    if(dstReg == 0xff) {
+                        printf("Invalid register destination identifier \"%s\"\n", ((struct tok*)(ll_get(&tokens, 1)->data))->tok);
+                        free(stmnt);
+                        goto err_ne_tok;
+                    }
+
+                    if(src1Reg == 0xff) {
+                        printf("Invalid register source identifier \"%s\"\n", ((struct tok*)(ll_get(&tokens, 2)->data))->tok);
+                        free(stmnt);
+                        goto err_ne_tok;
+                    }
+
+                    if(src2Reg == 0xff) {
+                        printf("Invalid register source identifier \"%s\"\n", ((struct tok*)(ll_get(&tokens, 3)->data))->tok);
+                        free(stmnt);
+                        goto err_ne_tok;
+                    }
+
+                    stmnt->data.instr.pat = PAT_DSS;
+                    stmnt->data.instr.dest = dstReg;
+                    stmnt->data.instr.src1 = src1Reg;
+                    stmnt->data.instr.src2 = src2Reg;
+
+                    ll_append(&statements, stmnt);
+                    break;
+                }
+                case PAT_DI: {
+                    if(tokens.len > 3) {
+                        printf("Too many tokens?\n");
+                    } else if(tokens.len < 3) {
+                        printf("Too little args for this (\"%s\").\n", ((struct tok*)ll_get(&tokens, 0)->data)->tok);
+                        free(stmnt);
+                        goto err_ne_tok;
+                    }
+
+                    uint8_t dstReg = parseReg(((struct tok*)(ll_get(&tokens, 1)->data))->tok);
+                    uint16_t imm8 = parseImm8(((struct tok*)(ll_get(&tokens, 2)->data))->tok);
+                    
+                    if(dstReg == 0xff) {
+                        printf("Invalid register destination identifier \"%s\"\n", ((struct tok*)(ll_get(&tokens, 1)->data))->tok);
+                        free(stmnt);
+                        goto err_ne_tok;
+                    }
+
+                    if((imm8 & 0xff00) != 0) {
+                        printf("Invalid imm8 \"%s\"\n", ((struct tok*)(ll_get(&tokens, 2)->data))->tok);
+                        free(stmnt);
+                        goto err_ne_tok;
+                    }
+
+                    stmnt->data.instr.pat = PAT_DI;
+                    stmnt->data.instr.dest = dstReg;
+                    stmnt->data.instr.imm8 = imm8 & 0xff;
+                    
+                    ll_append(&statements, stmnt);
+                    break;
+                }
+                case PAT_SI: {
+                    if(tokens.len >= 2) {
+                        printf("Too many tokens?\n");
+                    } else if(tokens.len < 2) {
+                        printf("Too little args for this (\"%s\").\n", ((struct tok*)ll_get(&tokens, 0)->data)->tok);
+                        free(stmnt);
+                        goto err_ne_tok;
+                    }
+
+                    uint8_t srcReg = parseReg(((struct tok*)(ll_get(&tokens, 1)->data))->tok);
+                    uint16_t imm8 = parseImm8(((struct tok*)(ll_get(&tokens, 2)->data))->tok);
+                    
+                    if(srcReg == 0xff) {
+                        printf("Invalid register source identifier \"%s\"\n", ((struct tok*)(ll_get(&tokens, 1)->data))->tok);
+                        free(stmnt);
+                        goto err_ne_tok;
+                    }
+
+                    if((imm8 & 0xff00) != 0) {
+                        printf("Invalid imm8 \"%s\"\n", ((struct tok*)(ll_get(&tokens, 2)->data))->tok);
+                        free(stmnt);
+                        goto err_ne_tok;
+                    }
+
+                    stmnt->data.instr.pat = PAT_SI;
+                    stmnt->data.instr.src1 = srcReg;
+                    stmnt->data.instr.imm8 = imm8 & 0xff;
+                    
+                    ll_append(&statements, stmnt);
+                    break;
+                }
+
+                case PAT_SDI: {
+                    if(tokens.len > 4) {
+                        printf("Too many tokens?\n");
+                    } else if(tokens.len < 4) {
+                        printf("Too little args for this (\"%s\").\n", ((struct tok*)ll_get(&tokens, 0)->data)->tok);
+                        free(stmnt);
+                        goto err_ne_tok;
+                    }
+
+                    uint8_t dstReg = parseReg(((struct tok*)(ll_get(&tokens, 1)->data))->tok);
+                    uint8_t srcReg = parseReg(((struct tok*)(ll_get(&tokens, 2)->data))->tok);
+                    uint16_t imm8 = parseImm8(((struct tok*)(ll_get(&tokens, 3)->data))->tok);
+                    
+                    if(dstReg == 0xff) {
+                        printf("Invalid register destination identifier \"%s\"\n", ((struct tok*)(ll_get(&tokens, 1)->data))->tok);
+                        free(stmnt);
+                        goto err_ne_tok;
+                    }
+
+                    if(srcReg == 0xff) {
+                        printf("Invalid register source identifier \"%s\"\n", ((struct tok*)(ll_get(&tokens, 2)->data))->tok);
+                        free(stmnt);
+                        goto err_ne_tok;
+                    }
+
+                    if((imm8 & 0xff00) != 0) {
+                        printf("Invalid imm8 \"%s\"\n", ((struct tok*)(ll_get(&tokens, 3)->data))->tok);
+                        free(stmnt);
+                        goto err_ne_tok;
+                    }
+
+                    stmnt->data.instr.pat = PAT_SDI;
+                    stmnt->data.instr.dest = dstReg;
+                    stmnt->data.instr.src1 = srcReg;
+                    stmnt->data.instr.imm8 = imm8 & 0xff;
+                    
+                    ll_append(&statements, stmnt);
+                    break;
+                }
+            }
+            offset += 2;
         }
-
+        
+err_ne_tok:
         ll_delete(&tokens);
-
         free(instr);
     }
 
+    
+    //printf("------------------STATEMENTS------------------------\n");
+
+    size_t totalSize = 0;
 
     for(size_t i = 0; i < statements.len; i++) {
         struct statement *stmnt = ll_get(&statements, i)->data;
 
         switch(stmnt->type) {
             case STATEMENT_DIRECTIVE_OFFSET: {
-                printf("Offset thingy: %i\n", stmnt->data.offsetAddr);
+                //printf("Offset thingy: %i\n", stmnt->data.offsetAddr);
                 break;
             }
             case STATEMENT_DIRECTIVE_ASCIIZ: {
-                printf("ASCIIZ str: \"%s\"\n", stmnt->data.asciiz.buf);
+                //printf("ASCIIZ str: \"%s\"\n", stmnt->data.asciiz.buf);
+                totalSize += stmnt->data.asciiz.size;
                 break;
             }
             case STATEMENT_CPUINSTRUCTION: {
-                printf("Cpu instruction\n");
+                //printf("Cpu instruction\n");
+                totalSize += 2;
                 break;
             }
         }
     }
 
+    /*
+    printf("------------------LABELS------------------------\n");
+    for(size_t i = 0; i < labels.len; i++) {
+        struct label *lab = ll_get(&labels, i)->data;
+        printf("\"%s\" -> %i\n", lab->name, lab->addr);
+    }
+    */
+
+    uint8_t* buf = calloc(totalSize, 1);
+    size_t idx = 0;
+
+    for(size_t i = 0; i < statements.len; i++) {
+        struct statement *stmnt = ll_get(&statements, i)->data;
+
+        switch(stmnt->type) {
+            case STATEMENT_DIRECTIVE_ASCIIZ: {
+                memcpy(&buf[idx], stmnt->data.asciiz.buf, stmnt->data.asciiz.size);
+                idx += stmnt->data.asciiz.size;
+                break;
+            }
+            case STATEMENT_CPUINSTRUCTION: {
+                uint16_t instr = asmCpuInstr(stmnt->data.instr, &labels);
+                memcpy(&buf[idx], &instr, 2);
+                idx += 2;
+                break;
+            }
+            case STATEMENT_DIRECTIVE_OFFSET: break;
+        }
+    }
+
+    if(idx != totalSize) printf("SOMEHTING is wrong, calced tot size = %lu and idx at end is = %lu\n", totalSize, idx);
+
+    ll_delete(&labels);
     ll_delete(&statements);
+
+    *bufSize = totalSize;
+    return buf;
 }
 
 void srcCodeLine_delete(void* data) {
@@ -920,9 +1528,20 @@ void statement_delete(void* data) {
     free(stmnt);
 }
 
-int main(int __attribute__((unused)) argc, char __attribute__((unused)) **argv) {
+/*
+ * CLI Args:
+ *  -i <input_file>
+ *  -o <output_file>
+ *  -I <include_dir>
+ *  -h help
+ */
+
+int main(int argc, char **argv) {
     printf("Vectorcpu Raw ASsembler v0.0.0\n");
     
+    char* inputFile_name = NULL;
+    char* outputFile_name = NULL;
+
     struct ll_head includes_llhead = {
         .start = NULL,
         .end = NULL,
@@ -930,7 +1549,50 @@ int main(int __attribute__((unused)) argc, char __attribute__((unused)) **argv) 
         .delete = includes_delete,
     };
 
-    const char inputFile_name[] = "./asm/fib.asm";
+    for(int i = 1; i < argc; i++) {
+        if(strcmp(argv[i], "-h") == 0) {
+            printf("Usage: %s [-h] -i <input file> -o <output file> [-I <include directory> ...]\n", argv[0]);
+            printf("\t-h : display this help message.\n");
+            printf("\t-i : filename for the input assembly file\n");
+            printf("\t-o : filename for the assembled binary blob\n");
+            printf("\t-I : directory name for the include path\n");
+            return 0;
+        } else if(strcmp(argv[i], "-i") == 0) {
+            if(inputFile_name != NULL) {
+                printf("Multiple input files given, only one can be accepted.\n");
+                free(inputFile_name);
+                if(!outputFile_name) free(outputFile_name);
+                return 1;
+            }
+            inputFile_name = strdup(argv[++i]);
+        } else if(strcmp(argv[i], "-o") == 0) {
+            if(outputFile_name != NULL) {
+                printf("Multiple output files given, only one can be accepted.\n");
+                free(outputFile_name);
+                if(!inputFile_name) free(inputFile_name);
+                return 1;
+            }
+            outputFile_name = strdup(argv[++i]);
+        } else if(strcmp(argv[i], "-I") == 0) {
+            if(argc - i == 0) {
+                printf("No direcotry given for include, skipping");
+            } else {
+                ll_append(&includes_llhead, strdup(argv[++i]));
+            }
+        }
+    }
+
+    if(inputFile_name == NULL) {
+        printf("No input file given.\n");
+        return 1;
+    }
+
+    if(outputFile_name == NULL) {
+        printf("No output file given.\n");
+        return 1;
+    }
+
+    //const char inputFile_name[] = "./asm/fib.asm";
 
     FILE* inputFile_fd = fopen(inputFile_name, "r");
     if(inputFile_fd == NULL) {
@@ -999,7 +1661,17 @@ int main(int __attribute__((unused)) argc, char __attribute__((unused)) **argv) 
 
     preprocess(&srcCode_llhead, &includes_llhead, &macros_llhead);
 
-    assemble(&srcCode_llhead);
+    size_t binBufSize = 0;
+
+    uint8_t* binBuf = assemble(&srcCode_llhead, &binBufSize);
+
+    FILE* outputFile_fd = fopen(outputFile_name, "wb");
+
+    fwrite(binBuf, 1, binBufSize, outputFile_fd);
+
+    fclose(outputFile_fd);
+
+    free(binBuf);
 
     /*
     printf("------------- CODE -------------\n");
@@ -1016,6 +1688,9 @@ int main(int __attribute__((unused)) argc, char __attribute__((unused)) **argv) 
     ll_delete(&srcCode_llhead);
     ll_delete(&includes_llhead);
     ll_delete(&macros_llhead);
+
+    free(inputFile_name);
+    free(outputFile_name);
 }
 
 /*
